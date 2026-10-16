@@ -5,7 +5,7 @@
 | **Projekt** | *Standardisation vs. Flexibility: A Quantitative Analysis of Barbell Deflection Under Heavy Loads Across Federation Regulations* (Human Factors and Sports Engineering, Wien) |
 | **Autor** | Nico Fuchs |
 | **Betreuer** | MSc. Markus Eckelt, MSc. Alexander Renner |
-| **Status** | Entwurf v0.1 (16.10.2026, CW 42), Ergebnis des Interviews |
+| **Status** | v0.2 (16.10.2026, CW 42): Interview-Ergebnis, Markerkonzept aktualisiert. M0 und M1 umgesetzt (siehe [ROADMAP](ROADMAP.md)) |
 | **Quellen** | Concept Draft (.docx), Draft-Präsentation (.pptx), Creo-Modell Sleeve-Aufsatz (`kk.prt`) |
 
 ---
@@ -123,11 +123,13 @@ Priorität: **M** = Muss, **S** = Soll, **K** = Kann.
 | FR-12 | Automatische Qualitätsflags (Marker nicht gefunden, Unschärfe, Marker-Neigung, Skala außerhalb Toleranz, Ausreißer ggü. Run) | M |
 | FR-13 | QC-Bericht (HTML/PDF): Bild mit Overlay der erkannten Marker und Biegelinie, Filter auf geflaggte Bilder | S |
 | FR-14 | Manueller Override: Markerpositionen für einzelne Bilder nachträglich setzen, Eingriff wird im Datensatz markiert | K |
+| FR-31 | **Plattenzähler (Vorschlag, noch nicht bestätigt):** Scheibenzahl je Seite aus der Stapelbreite (mm über ArUco-Skala ÷ Scheibendicke) und den Trennkanten bestimmen; Abgleich mit dem Manifest (Last = 25 + 50·n kg), getrennt links/rechts. Flags bei falscher Zuordnung und asymmetrischer Beladung | S |
+| FR-32 | ID-Tafel mit ArUco-Code (Stange, Run, Stufe) im Bild als deterministische Zuordnung (Vorschlag, optional) | K |
 
 ### 6.3 Validierung (Details in Abschnitt 7)
 | ID | Anforderung | Prio |
 |---|---|---|
-| FR-15 | Generator für synthetische Bilder (bekannte Biegung, Linsenverzerrung, Perspektive, Rauschen, Beleuchtung, Markerrotation) | M |
+| FR-15 | Generator für synthetische Bilder (bekannte Biegung, gelbe Kugeln, Hintergrund-ArUco, Scheiben und Klemmen passend zur Last, Kamerarolle, Rauschen; geplant: Linsenverzerrung, Perspektive, Beleuchtung, Kugelreflexe). Ladeprotokoll: 20 kg = leere Stange, sonst Last = 25 + 50·n kg mit n 25-kg-Scheiben je Seite inkl. Klemmen | M |
 | FR-16 | Validierungsbericht: Bias, Streuung, Unsicherheit gegen Ground Truth | M |
 | FR-17 | Stichprobenhafte grafische Nachbildung: Overlay der rekonstruierten Biegung auf dem Originalfoto + manueller Gegencheck an zufälliger, stratifizierter Stichprobe | M |
 | FR-18 | Balkenmodell (Euler-Bernoulli, Überhangträger) mit Plausibilitätsvergleich zu gemessenen Werten | S |
@@ -299,6 +301,7 @@ barbellscan/
 | O2 | ~~Markerwahl~~ **entschieden:** gelbe Kugeln an den Kappen, Elektroband in der Mitte, ArUco nur im Hintergrund | Umgesetzt in Simulator und Tracking |
 | O8 | Abstand/Tiefe der ArUco-Ebene zur Stangenebene, Markergröße (Annahme 100 mm), Kugeldurchmesser (Annahme 50 mm) | Vor dem Shooting messen und in `config/analysis.yaml` eintragen |
 | O9 | Kugeln starr oder hängend montiert (`ball_hang_mm`) | Starr bevorzugt |
+| O10 | Plattenzähler/ID-Tafel (FR-31/32) übernehmen? Scheibendicke und -durchmesser der roten 25-kg-Scheiben, Klemmendicke messen (Simulator nimmt 28 mm, 450 mm, 30 mm an) | Entscheidung vor M3 |
 | O3 | Genaue Anzahl Baseline-Fotos (1 pro Run? zusätzlich vor Run 1?) | Je Run eine Baseline vor Belastung (leere Stange) **und** eine nach Entlastung, sonst ist die Restverformung nicht messbar |
 | O4 | Reihenfolge der Stangen und Runs (Randomisierung, Pausen, Temperatur) | Reihenfolge im Manifest erfassen, in Analyse als Kovariate prüfbar |
 | O5 | Kamera, Auflösung, Abstand, Fixierung (Stativ) | Im Kalibrierprotokoll festhalten, EXIF mitlesen |

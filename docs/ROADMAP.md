@@ -1,6 +1,6 @@
 # Roadmap – Barbellscan
 
-Stand: 16.10.2026 (CW 42). Abgeleitet aus dem Zeitplan (Table 3) im Concept Draft und dem [PRD](PRD.md). Die Reihenfolge ist so gewählt, dass **keine Phase auf echte Fotos warten muss**, bis die Pipeline steht.
+Stand: 16.10.2026 (CW 42). **M0 und M1 sind umgesetzt, als Nächstes folgt M2.** Abgeleitet aus dem Zeitplan (Table 3) im Concept Draft und dem [PRD](PRD.md). Die Reihenfolge ist so gewählt, dass **keine Phase auf echte Fotos warten muss**, bis die Pipeline steht.
 
 ## Überblick
 
@@ -62,6 +62,7 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 
 ## M3 – Vollständige Messkette und QC (CW 44–46)
 - D1–D4 mit Unsicherheit (FR-10, FR-11), Biegelinie per Spline mit geraden Sleeves.
+- Plattenzähler mit Metadaten-Check (FR-31, wenn O10 bestätigt), optional ID-Tafel (FR-32).
 - Qualitätsflags (FR-12), QC-Bericht mit Overlay (FR-13), `barbellscan run` End-to-End, Parallelisierung und Cache.
 - Manifest-Prüfung auf Vollständigkeit (14 × 5 × 10 Bilder).
 
@@ -115,6 +116,7 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 |---|---|---|
 | O1 Primäre Durchbiegungsdefinition (Vorschlag D1) | Ende M2 | Analyseplan, M6 |
 | O8 Markergröße/Tiefe, Kugeldurchmesser | vor Fotoshooting | Skala (FR-09) |
+| O10 Plattenzähler ja/nein, Scheibenmaße | vor M3 | FR-31/32 |
 | O3 Baseline-Fotos (vor und nach Run) | vor Fotoshooting | H2 |
 | O5 Kamera/Kalibrierprotokoll | vor Fotoshooting | M2 mit Echtdaten |
 | O7 Akzeptanzschwelle | M5 | Validierungsurteil |
