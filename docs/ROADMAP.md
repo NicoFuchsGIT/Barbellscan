@@ -33,7 +33,7 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 
 ---
 
-## M0 – Fundament (CW 42)
+## M0 – Fundament (CW 42) ✅ erledigt
 - `uv init`, `pyproject.toml`, Python 3.14 prüfen (Wheels für OpenCV/SciPy), sonst Fallback als ADR.
 - ruff, pytest, pre-commit, GitHub-Actions-CI (Lint + Tests).
 - Ordnerstruktur laut PRD 10.2; `.gitignore` für `data/raw/`, `outputs/`.
@@ -42,13 +42,15 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 
 **Fertig, wenn:** `uv run pytest` und CI sind grün, `barbellscan --help` läuft, `bars.yaml` validiert.
 
-## M1 – Synthetik und Kern-Tracking (CW 42–43)
+## M1 – Synthetik und Kern-Tracking (CW 42–43) ✅ erledigt
 - Generator für synthetische Bilder (FR-15): Biegelinie, ArUco-Marker, Tape-Mitte, Rauschen, einfache Verzerrung.
 - ArUco-Detektion und Subpixel-Ecken (FR-06), Tape-Detektion per HSV (FR-08).
 - D1 aus drei Punkten, Ausgabe als Tidy-CSV.
 - **Demo für Zwischenpräsentation 1:** synthetisches Bild → erkannte Marker → Durchbiegung → Soll/Ist-Vergleich, plus kurze Vorstellung des Analyseplans.
 
 **Fertig, wenn:** auf 100 synthetischen Bildern mit bekannter Biegung liegt der absolute Fehler unter dem vorläufigen Zielwert (0,5 mm) bei ungestörten Bedingungen.
+
+**Ergebnis (700 synthetische Bilder, 1 px/mm, 0,3° Kamerarollen, Rauschen, Unschärfe):** Detektionsrate 100 %, Bias +0,02 mm, SD 0,07 mm, 95-%-LoA −0,12 bis +0,17 mm, maximaler Fehler 0,26 mm. Das gilt nur für ungestörte Bedingungen ohne Linsenverzerrung und Perspektive. Diese Störgrößen kommen in M2/M5 (V1) dazu.
 
 ## M2 – Kalibrierung und Skalierung (CW 43–45)
 - Intrinsische Kalibrierung mit Schachbrett/ChArUco, RMS-Reprojektionsfehler (FR-05).

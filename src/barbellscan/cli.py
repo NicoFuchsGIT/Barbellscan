@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import pandas as pd
 import typer
@@ -47,3 +48,75 @@ def check_manifest_cmd(
     if problems:
         raise typer.Exit(code=1)
     typer.echo("Manifest vollständig und konsistent.")
+
+
+@app.command()
+def simulate(
+    out: Path = Path("data/synthetic"),
+    bars: Path = Path("config/bars.yaml"),
+    analysis: Path = Path("config/analysis.yaml"),
+    scale: float = typer.Option(1.0, help="Bildmaßstab in px/mm"),
+    seed: int | None = typer.Option(None, help="Überschreibt den Seed aus der Config"),
+    only: Annotated[
+        list[str] | None, typer.Option(help="Nur diese bar_ids erzeugen (mehrfach angebbar)")
+    ] = None,
+    jobs: int = -1,
+) -> None:
+    """Synthetischen Datensatz (Bilder, manifest.csv, truth.csv) erzeugen."""
+    from .simulate import SimParams, generate_dataset
+
+    truth = generate_dataset(
+        out,
+        load_bars(bars),
+        load_analysis(analysis),
+        SimParams(scale_px_per_mm=scale),
+        seed=seed,
+        only_bars=only or None,
+        n_jobs=jobs,
+    )
+    typer.echo(f"{len(truth)} Bilder nach {out} geschrieben.")
+
+
+@app.command()
+def track(
+    manifest: Path = Path("data/synthetic/manifest.csv"),
+    out: Path = Path("data/derived/tracking.csv"),
+    jobs: int = -1,
+) -> None:
+    """Marker detektieren und D1 für alle Bilder des Manifests berechnen."""
+    from .tracking import track_manifest
+
+    df = track_manifest(manifest, n_jobs=jobs)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    flagged = int((df["quality_flags"].fillna("") != "").sum())
+    typer.echo(f"{len(df)} Bilder ausgewertet, {flagged} mit Flags -> {out}")
+
+
+@app.command()
+def compare(
+    tracking: Path = Path("data/derived/tracking.csv"),
+    truth: Path = Path("data/synthetic/truth.csv"),
+) -> None:
+    """Tracking-Ergebnis gegen synthetische Ground Truth vergleichen (Bias, RMSE, LoA)."""
+    from .validation import compare_to_truth
+
+    for k, v in compare_to_truth(pd.read_csv(tracking), pd.read_csv(truth)).items():
+        typer.echo(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
+
+
+@app.command()
+def overlay(
+    image: Path,
+    out: Path = Path("outputs/overlay.png"),
+) -> None:
+    """Einzelbild auswerten und QC-Overlay speichern."""
+    import cv2
+
+    from .tracking import draw_overlay, track_image
+
+    img = cv2.imread(str(image), cv2.IMREAD_COLOR)
+    row = track_image(img)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), draw_overlay(img, row))
+    typer.echo(f"D1 = {row['d1_mm']:.3f} mm, Flags: {row['quality_flags'] or '-'}")
