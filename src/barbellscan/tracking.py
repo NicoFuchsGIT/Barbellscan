@@ -10,38 +10,46 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from .deflection import d1_mm
-from .detection import detect_aruco, detect_tape
-from .simulate import MARKER_SIZE_MM
+from .detection import detect_aruco, detect_balls, detect_tape
 
+DEFAULT_ARUCO_SIZE_MM = 100.0
 SCALE_MIN_PX_PER_MM = 0.2  # sanity: darunter ist ein Marker zu klein für Subpixel-Genauigkeit
 
 
-def track_image(image: np.ndarray, detector=None) -> dict:
+def track_image(
+    image: np.ndarray,
+    detector=None,
+    marker_size_mm: float = DEFAULT_ARUCO_SIZE_MM,
+    ball_hang_mm: float = 0.0,
+) -> dict:
     """Wertet ein Bild aus; fehlende Marker führen zu NaN und einem Flag, nie zu einem Fehler."""
-    hits = detect_aruco(image, detector)
+    aruco = detect_aruco(image, detector)
+    balls = detect_balls(image)
     tape = detect_tape(image)
     flags = []
-    if "left" not in hits:
-        flags.append("missing_left")
-    if "right" not in hits:
-        flags.append("missing_right")
+    if aruco is None:
+        flags.append("missing_aruco")
+    if len(balls) < 2:
+        flags.append("missing_ball")
     if tape is None:
         flags.append("missing_tape")
 
     row = {k: np.nan for k in ("left_x", "left_y", "right_x", "right_y", "centre_x", "centre_y")}
+    row.update(aruco_x=np.nan, aruco_y=np.nan, aruco_roll_deg=np.nan)
     row.update(scale_px_per_mm=np.nan, d1_mm=np.nan)
-    if "left" in hits:
-        row["left_x"], row["left_y"] = hits["left"].centre_px
-    if "right" in hits:
-        row["right_x"], row["right_y"] = hits["right"].centre_px
+    for name, (xy, _) in balls.items():
+        row[f"{name}_x"], row[f"{name}_y"] = xy
     if tape is not None:
         (row["centre_x"], row["centre_y"]), _ = tape
-    if hits:
-        row["scale_px_per_mm"] = float(np.mean([h.side_px for h in hits.values()])) / MARKER_SIZE_MM
+    if aruco is not None:
+        row["aruco_x"], row["aruco_y"] = aruco.centre_px
+        row["aruco_roll_deg"] = aruco.roll_deg
+        row["scale_px_per_mm"] = aruco.side_px / marker_size_mm
         if row["scale_px_per_mm"] < SCALE_MIN_PX_PER_MM:
             flags.append("scale_too_small")
     if not flags:
-        row["d1_mm"] = d1_mm(
+        # Hängende Kugeln verschieben die Sehne um ihre Hängelänge nach unten => abziehen
+        row["d1_mm"] = -ball_hang_mm + d1_mm(
             (row["left_x"], row["left_y"]),
             (row["right_x"], row["right_y"]),
             (row["centre_x"], row["centre_y"]),
@@ -51,19 +59,26 @@ def track_image(image: np.ndarray, detector=None) -> dict:
     return row
 
 
-def _track_path(path: Path) -> dict:
+def _track_path(path: Path, marker_size_mm: float, ball_hang_mm: float) -> dict:
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
         return {"quality_flags": "unreadable_image"}
-    return track_image(image)
+    return track_image(image, marker_size_mm=marker_size_mm, ball_hang_mm=ball_hang_mm)
 
 
-def track_manifest(manifest_path: Path, n_jobs: int = -1) -> pd.DataFrame:
+def track_manifest(
+    manifest_path: Path,
+    n_jobs: int = -1,
+    marker_size_mm: float = DEFAULT_ARUCO_SIZE_MM,
+    ball_hang_mm: float = 0.0,
+) -> pd.DataFrame:
     """Alle Bilder des Manifests auswerten (Bildpfade relativ zum Manifest-Ordner)."""
     manifest_path = Path(manifest_path)
     manifest = pd.read_csv(manifest_path)
     base = manifest_path.parent
-    rows = Parallel(n_jobs=n_jobs)(delayed(_track_path)(base / p) for p in manifest["image_path"])
+    rows = Parallel(n_jobs=n_jobs)(
+        delayed(_track_path)(base / p, marker_size_mm, ball_hang_mm) for p in manifest["image_path"]
+    )
     return pd.concat([manifest, pd.DataFrame(rows)], axis=1)
 
 
@@ -82,6 +97,9 @@ def draw_overlay(image: np.ndarray, row: dict) -> np.ndarray:
             2,
             cv2.LINE_AA,
         )
+    if not np.isnan(row.get("aruco_x", np.nan)):
+        a = (int(round(row["aruco_x"])), int(round(row["aruco_y"])))
+        cv2.drawMarker(out, a, (0, 160, 0), cv2.MARKER_CROSS, 20, 2, cv2.LINE_AA)
     for p in pts.values():
         if not any(np.isnan(v) for v in p):
             cv2.circle(out, (int(round(p[0])), int(round(p[1]))), 6, (255, 128, 0), 2, cv2.LINE_AA)

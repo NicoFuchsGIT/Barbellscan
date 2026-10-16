@@ -3,6 +3,9 @@ loads_kg: [20, 75, 125, 175, 225, 275, 325, 375, 425]   # Maximallast auf 425 kg
 runs: 5
 baseline_after_unload: true      # Baseline-Foto nach Entlastung je Run (PRD O3)
 support_offset_mm: 371           # Auflagepunkte links/rechts vom Zentrum
+aruco_size_mm: 100               # ArUco-Referenzmarker im Hintergrund (ANNAHME, am Druck nachmessen)
+ball_diameter_mm: 50             # gelbe Kugeln an den Sleeve-Kappen (ANNAHME)
+ball_hang_mm: 0                  # vertikaler Versatz Kugelmitte zum Sleeve-Ende; 0 = starr montiert
 primary_definition: D1           # PRD O1, vor Sichtung der Echtdaten einfrieren
 sign_convention: ends_below_centre_positive
 alpha: 0.05

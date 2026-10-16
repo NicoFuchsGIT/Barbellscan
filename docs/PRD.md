@@ -75,7 +75,7 @@ Ein reproduzierbarer Befehl (`barbellscan run`) verwandelt Fotos und Metadaten i
 - 13 Stangenmodelle (9 Power, 3 Deadlift, 1 Squat-Modell), davon Squat in **2 physischen Exemplaren** ⇒ **14 physische Stangen**.
 - 9 Laststufen × 5 Runs. Pro Run zusätzlich 1 Baseline-Foto nach Entlastung.
 - Erwartete Bildmenge: 14 × 5 × (9 + 1) = **700 Bilder** (Draft nennt 715 für 11 Stufen, nicht mehr gültig).
-- Aufbau: Legend Monolift, Auflagepunkte ca. ±371 mm vom Zentrum (J-Hooks), Marker: Elektroband in der Mitte, Enden entweder ArUco (3D-gedruckter Aufsatz mit Pendel-Slipring) oder reflektierende Kugel (noch Feldtest).
+- Aufbau: Legend Monolift, Auflagepunkte ca. ±371 mm vom Zentrum (J-Hooks), Marker (Stand 16.10.2026): **gelbe Kugel** an jeder Sleeve-Kappe (Stangenenden), **Elektroband** in der Stangenmitte, **ein ArUco-Referenzmarker im Hintergrund** (Bildmitte) nur für Pixel→mm und Kamera-Verzerrung. Der Slipring-Aufsatz mit ArUco an den Enden entfällt.
 
 ### 5.2 Tidy-Datenmodell (Single Source of Truth)
 Eine Zeile pro Bild/Marker-Auswertung:
@@ -114,10 +114,10 @@ Priorität: **M** = Muss, **S** = Soll, **K** = Kann.
 | ID | Anforderung | Prio |
 |---|---|---|
 | FR-05 | Intrinsische Kalibrierung (Schachbrett/ChArUco), Ausgabe von Kameramatrix, Verzerrungskoeffizienten und **RMS-Reprojektionsfehler**; Undistortion pro Bild | M |
-| FR-06 | Detektion ArUco-Marker (OpenCV) an beiden Enden, Subpixel-Eckenverfeinerung | M |
-| FR-07 | Alternative Detektion Kugelmarker (Farb-/Helligkeitsschwelle, Subpixel-Zentroid per Bildmomente) | S, abhängig vom Feldtest |
+| FR-06 | Detektion des ArUco-Referenzmarkers im Hintergrund (OpenCV, ID 0), Subpixel-Eckenverfeinerung; liefert Skala (px/mm) und Bildneigung | M |
+| FR-07 | Detektion der gelben Kugeln an den Sleeve-Kappen über die Farbe (zwei größte Blobs, links/rechts nach x, Subpixel-Zentroid per Bildmomente ohne harten Schwellwert); konstante Hängelänge `ball_hang_mm` wird von D1 abgezogen | M |
 | FR-08 | Detektion Mittenmarker (farbiges Elektroband, HSV-Segmentierung, Zentroid in Subpixel) | M |
-| FR-09 | Skalierung px→mm über Referenzquadrat (10 × 10 cm) oder bekannten ArUco-Marker in der Bildebene, Perspektiv-Rektifizierung per Homographie; Skalenfehler wird dokumentiert | M |
+| FR-09 | Skalierung px→mm über die Kantenlänge des Hintergrund-ArUco (Config `aruco_size_mm`), optional Referenzquadrat als Gegenprobe; Tiefenversatz zwischen Markerebene und Stangenebene wird als Skalenkorrektur bzw. Unsicherheit berücksichtigt; Perspektiv-Rektifizierung per Homographie | M |
 | FR-10 | Rekonstruktion der Biegelinie aus Markerpunkten (Spline/Polynom mit Randbedingung „Sleeves bleiben gerade“) | S |
 | FR-11 | Berechnung D1–D4 pro Bild, jeweils mit Unsicherheit (Fehlerfortpflanzung aus Subpixel-Streuung + Skalenfehler) | M |
 | FR-12 | Automatische Qualitätsflags (Marker nicht gefunden, Unschärfe, Marker-Neigung, Skala außerhalb Toleranz, Ausreißer ggü. Run) | M |
@@ -245,7 +245,7 @@ barbellscan/
 │   ├── config.py      # pydantic-Modelle für YAML
 │   ├── io.py          # Manifest, Bilder, EXIF
 │   ├── calibration.py # Intrinsics, Undistortion, Reprojektionsfehler
-│   ├── detection.py   # ArUco / Kugel / Tape
+│   ├── detection.py   # ArUco (Hintergrund) / gelbe Kugeln / Tape
 │   ├── geometry.py    # Homographie, Skala, Biegelinie
 │   ├── deflection.py  # D1–D4, Unsicherheit
 │   ├── qc.py          # Flags, Overlays, Bericht
@@ -278,9 +278,12 @@ barbellscan/
 |---|---|---|
 | Fotos fehlen noch, Shooting verspätet (laut Plan CW 40) | Zeitdruck bei Intermediate Results | Pipeline vollständig auf Synthetik entwickeln, Echtdaten später nur „einstecken“ |
 | Kleine Stichprobe (3 Deadlift-, 2 Squat-Exemplare) | Geringe Power, KIs breit | Exakte/Permutationstests, Effektstärken statt p-Wert-Fokus, ehrliche Limitation |
-| Markerwahl (ArUco-Slipring vs. Kugel) noch offen | Detektionscode und Fehlerbudget abhängig | Beide Detektoren hinter einem Interface, Entscheidung im Feldtest dokumentieren |
+| **Tiefenversatz:** Hintergrund-ArUco liegt nicht in der Stangenebene | Skala um das Abbildungsverhältnis falsch; D1 skaliert proportional (5 % Versatz ⇒ 5 % Fehler, im Test bestätigt) | Marker möglichst in der Stangenebene (Ständer neben dem Monolift) oder Abstände messen und Korrekturfaktor in die Unsicherheit aufnehmen; Gegenprobe mit Referenzquadrat |
+| **Verzerrung:** Ein einzelner Marker in Bildmitte erlaubt keine Schätzung der Linsenverzerrung, und die Kugeln liegen am Bildrand, wo sie am größten ist | Systematischer Fehler der Endpunkte | Intrinsische Kalibrierung vorab (ChArUco, FR-05), Marker nur für Skala und Plausibilität |
+| **Hängende Kugeln:** Hängelänge verschiebt die Sehne nach unten (D1 + h), Pendeln addiert Rauschen | Systematischer Fehler | Kugel starr an der Kappe montieren, sonst `ball_hang_mm` messen und abziehen; Test vorhanden |
+| Gelbe Kugeln: Reflexe, Verwechslung mit gelben Gegenständen im Hintergrund | Fehlerhafte Detektion | Mattes Gelb, Farbblobs plausibilisieren (Größe, genau zwei), QC-Flags |
 | Kamerawinkel/Linse nicht fixiert | Perspektiv- und Skalierungsfehler | D1 statt absoluter Werte primär, Referenzquadrat/ArUco in jeder Aufnahme, Kalibrierprotokoll |
-| Beleuchtung/Reflexe (Kugelmarker, glänzender Schaft) | Detektionsausfälle | QC-Flags, manueller Override mit Log, Beleuchtungsvarianten in Synthetik testen |
+| Beleuchtung/Reflexe (glänzende Kugel, glänzender Schaft) | Detektionsausfälle | QC-Flags, manueller Override mit Log, Beleuchtungsvarianten in Synthetik testen |
 | Durchbiegungen kleiner als Auflösung bei niedrigen Lasten | Rauschen dominiert | MDC ausweisen, niedrige Lasten nicht überinterpretieren |
 | Re-Seating der Stange zwischen Runs | Streuung zwischen Runs | In Reliabilität bewusst enthalten, D1 ist davon weniger betroffen |
 | Python-3.14-Wheels fehlen | Setup-Probleme | Früh prüfen, Fallback dokumentieren |
@@ -293,7 +296,9 @@ barbellscan/
 | # | Punkt | Empfehlung |
 |---|---|---|
 | O1 | Primäre Durchbiegungsdefinition (D1–D4) | D1 vorab einfrieren |
-| O2 | Marker: ArUco-Slipring vs. Kugel | Nach Feldtest, bis dahin beide Detektoren |
+| O2 | ~~Markerwahl~~ **entschieden:** gelbe Kugeln an den Kappen, Elektroband in der Mitte, ArUco nur im Hintergrund | Umgesetzt in Simulator und Tracking |
+| O8 | Abstand/Tiefe der ArUco-Ebene zur Stangenebene, Markergröße (Annahme 100 mm), Kugeldurchmesser (Annahme 50 mm) | Vor dem Shooting messen und in `config/analysis.yaml` eintragen |
+| O9 | Kugeln starr oder hängend montiert (`ball_hang_mm`) | Starr bevorzugt |
 | O3 | Genaue Anzahl Baseline-Fotos (1 pro Run? zusätzlich vor Run 1?) | Je Run eine Baseline vor Belastung (leere Stange) **und** eine nach Entlastung, sonst ist die Restverformung nicht messbar |
 | O4 | Reihenfolge der Stangen und Runs (Randomisierung, Pausen, Temperatur) | Reihenfolge im Manifest erfassen, in Analyse als Kovariate prüfbar |
 | O5 | Kamera, Auflösung, Abstand, Fixierung (Stativ) | Im Kalibrierprotokoll festhalten, EXIF mitlesen |
@@ -301,6 +306,7 @@ barbellscan/
 | O7 | Akzeptanzschwelle der Messunsicherheit | Nach V1 festlegen |
 
 **Inkonsistenzen, die vor Abgabe zu bereinigen sind:**
+0. Markerkonzept geändert: Concept Draft (Abschnitt 2.1, Figure 3/4), Slides (Folie 7) und das Creo-Modell (`kk.prt`, Slipring-Aufsatz) beschreiben noch ArUco an den Enden bzw. Kugel-/Slipring-Varianten; Methods muss auf gelbe Kugel + Hintergrund-ArUco umgeschrieben werden.
 1. Concept Draft und Slides nennen 525 kg, 11 Laststufen und 715 Bilder; neu 425 kg, 9 Stufen. Außerdem steht im Zeitplan „520 kg barbell photoshoot“.
 2. Slides führen RQ2/H3, das .docx nicht mehr.
 3. H1 vergleicht gegen „Power und Squat“, aber Squat ist nur ein Modell (2 Exemplare), daher nicht inferenzstatistisch prüfbar.

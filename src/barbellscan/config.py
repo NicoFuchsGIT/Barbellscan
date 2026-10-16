@@ -61,6 +61,9 @@ class AnalysisConfig(BaseModel):
     runs: int = Field(ge=1)
     baseline_after_unload: bool = True
     support_offset_mm: float = Field(gt=0)
+    aruco_size_mm: float = Field(default=100.0, gt=0)  # Referenzmarker im Hintergrund
+    ball_diameter_mm: float = Field(default=50.0, gt=0)  # gelbe Kugeln an den Kappen
+    ball_hang_mm: float = Field(default=0.0, ge=0)  # Kugelmitte unter dem Sleeve-Ende
     primary_definition: Literal["D1", "D2", "D3", "D4"] = "D1"
     sign_convention: str = "ends_below_centre_positive"
     alpha: float = Field(default=0.05, gt=0, lt=1)

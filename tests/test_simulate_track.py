@@ -3,12 +3,18 @@ import pytest
 
 from barbellscan.config import load_analysis, load_bars
 from barbellscan.deflection import d1_mm
-from barbellscan.simulate import SimParams, bend_profile, render
-from barbellscan.tracking import track_image
+from barbellscan.detection import detect_balls
+from barbellscan.simulate import SimParams, bend_profile, plates_for_load, render
+from barbellscan.tracking import draw_overlay, track_image
 from barbellscan.validation import compare_to_truth
 
 CFG = load_analysis()
 BARS = load_bars()
+
+
+def _render(bar_id="ohio_deadlift", d1=10.0, seed=1, **kw):
+    bar = BARS.model_of(bar_id)
+    return render(bar, d1, CFG.support_offset_mm, SimParams(**kw), np.random.default_rng(seed))
 
 
 def test_bend_profile_hits_requested_d1_and_straight_sleeves():
@@ -35,21 +41,53 @@ def test_d1_is_roll_invariant_and_signed():
 
 @pytest.mark.parametrize("d1", [0.0, 3.0, 18.0, 35.0])
 def test_tracking_recovers_known_deflection(d1):
-    bar = BARS.model_of("ohio_deadlift")
-    res = render(bar, d1, CFG.support_offset_mm, SimParams(roll_deg=0.4), np.random.default_rng(1))
+    res = _render(d1=d1, roll_deg=0.4)
     row = track_image(res.image)
     assert row["quality_flags"] == ""
     assert row["d1_mm"] == pytest.approx(d1, abs=0.25)
     assert row["scale_px_per_mm"] == pytest.approx(1.0, rel=0.01)
 
 
-def test_missing_marker_is_flagged_not_raised():
-    bar = BARS.model_of("ohio_power")
-    img = render(bar, 8.0, CFG.support_offset_mm).image.copy()
-    img[:, : img.shape[1] // 4] = 225  # linken Marker auslöschen
+def test_ball_centroids_match_truth_to_subpixel():
+    res = _render(d1=12.0, roll_deg=0.3)
+    balls = detect_balls(res.image)
+    for name in ("left", "right"):
+        assert np.allclose(balls[name][0], res.points_px[name], atol=0.15)
+
+
+def test_plates_do_not_disturb_tracking():
+    res = _render("ohio_power", d1=6.0, plates_per_side=4, roll_deg=0.3)
+    row = track_image(res.image)
+    assert row["quality_flags"] == ""
+    assert row["d1_mm"] == pytest.approx(6.0, abs=0.25)
+
+
+def test_hanging_balls_shift_d1_by_hang_length_and_can_be_corrected():
+    """Hängende Kugeln senken die Sehne um h => D1 + h; mit bekanntem h korrigierbar."""
+    img = _render(d1=15.0, ball_hang_mm=40.0).image
+    assert track_image(img)["d1_mm"] == pytest.approx(55.0, abs=0.25)
+    assert track_image(img, ball_hang_mm=40.0)["d1_mm"] == pytest.approx(15.0, abs=0.25)
+
+
+def test_aruco_in_other_depth_plane_biases_scale():
+    """Parallaxe-Risiko: Markerebene 5 % weiter weg => Skala 5 % zu klein => D1 5 % zu groß."""
+    row = track_image(_render(d1=20.0, aruco_scale_ratio=0.95).image)
+    assert row["d1_mm"] == pytest.approx(20.0 / 0.95, rel=0.01)
+
+
+def test_plates_for_load_matches_protocol():
+    assert [plates_for_load(x) for x in (20, 75, 125, 225, 425)] == [0, 1, 2, 4, 8]
+
+
+def test_missing_markers_are_flagged_not_raised():
+    img = _render("ohio_power", d1=8.0).image.copy()
+    img[:, : img.shape[1] // 4] = 225  # linke Kugel auslöschen
     row = track_image(img)
-    assert "missing_left" in row["quality_flags"]
+    assert "missing_ball" in row["quality_flags"]
     assert np.isnan(row["d1_mm"])
+    img2 = _render("ohio_power", d1=8.0).image.copy()
+    img2[: img2.shape[0] // 4, :] = 225  # ArUco auslöschen
+    assert "missing_aruco" in track_image(img2)["quality_flags"]
 
 
 def test_compare_to_truth_reports_small_bias(tmp_path):
@@ -64,8 +102,6 @@ def test_compare_to_truth_reports_small_bias(tmp_path):
 
 
 def test_overlay_draws_without_error():
-    from barbellscan.tracking import draw_overlay
-
-    img = render(BARS.model_of("ohio_power"), 8.0, CFG.support_offset_mm).image
+    img = _render("ohio_power", d1=8.0).image
     out = draw_overlay(img, track_image(img))
     assert out.shape == img.shape and (out != img).any()

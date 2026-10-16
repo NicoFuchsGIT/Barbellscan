@@ -69,7 +69,12 @@ def simulate(
         out,
         load_bars(bars),
         load_analysis(analysis),
-        SimParams(scale_px_per_mm=scale),
+        SimParams(
+            scale_px_per_mm=scale,
+            aruco_size_mm=load_analysis(analysis).aruco_size_mm,
+            ball_diameter_mm=load_analysis(analysis).ball_diameter_mm,
+            ball_hang_mm=load_analysis(analysis).ball_hang_mm,
+        ),
         seed=seed,
         only_bars=only or None,
         n_jobs=jobs,
@@ -81,12 +86,16 @@ def simulate(
 def track(
     manifest: Path = Path("data/synthetic/manifest.csv"),
     out: Path = Path("data/derived/tracking.csv"),
+    analysis: Path = Path("config/analysis.yaml"),
     jobs: int = -1,
 ) -> None:
     """Marker detektieren und D1 für alle Bilder des Manifests berechnen."""
     from .tracking import track_manifest
 
-    df = track_manifest(manifest, n_jobs=jobs)
+    cfg = load_analysis(analysis)
+    df = track_manifest(
+        manifest, n_jobs=jobs, marker_size_mm=cfg.aruco_size_mm, ball_hang_mm=cfg.ball_hang_mm
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
     flagged = int((df["quality_flags"].fillna("") != "").sum())
@@ -109,6 +118,7 @@ def compare(
 def overlay(
     image: Path,
     out: Path = Path("outputs/overlay.png"),
+    analysis: Path = Path("config/analysis.yaml"),
 ) -> None:
     """Einzelbild auswerten und QC-Overlay speichern."""
     import cv2
@@ -116,7 +126,8 @@ def overlay(
     from .tracking import draw_overlay, track_image
 
     img = cv2.imread(str(image), cv2.IMREAD_COLOR)
-    row = track_image(img)
+    cfg = load_analysis(analysis)
+    row = track_image(img, marker_size_mm=cfg.aruco_size_mm, ball_hang_mm=cfg.ball_hang_mm)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), draw_overlay(img, row))
     typer.echo(f"D1 = {row['d1_mm']:.3f} mm, Flags: {row['quality_flags'] or '-'}")

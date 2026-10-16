@@ -7,7 +7,7 @@ Stand: 16.10.2026 (CW 42). Abgeleitet aus dem Zeitplan (Table 3) im Concept Draf
 | Meilenstein | Zeitraum (CW) | Fixtermin im Studienplan | Ergebnis |
 |---|---|---|---|
 | **M0** Fundament | 42 | | Repo, Toolchain, CI, Config, Datenmodell |
-| **M1** Synthetik + Kern-Tracking | 42–43 | **Zwischenpräsentation 1 (CW 43)** | Synthetische Bilder, ArUco- und Tape-Detektion, erste Durchbiegung D1 |
+| **M1** Synthetik + Kern-Tracking | 42–43 | **Zwischenpräsentation 1 (CW 43)** | Synthetische Bilder, Detektion (gelbe Kugeln, Tape, Hintergrund-ArUco), erste Durchbiegung D1 |
 | **M2** Kalibrierung + Skalierung | 43–45 | | Undistortion, Homographie, px→mm, Reprojektionsfehler |
 | **M3** Vollständige Messkette + QC | 44–46 | | D1–D4 mit Unsicherheit, Flags, QC-Bericht, Echtdaten-tauglich |
 | **M4** Echtdaten einspielen | sobald Fotos vorliegen (Ziel ≤ 46) | | Manifest, erste echte Auswertung, Markerentscheidung |
@@ -43,20 +43,20 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 **Fertig, wenn:** `uv run pytest` und CI sind grün, `barbellscan --help` läuft, `bars.yaml` validiert.
 
 ## M1 – Synthetik und Kern-Tracking (CW 42–43) ✅ erledigt
-- Generator für synthetische Bilder (FR-15): Biegelinie, ArUco-Marker, Tape-Mitte, Rauschen, einfache Verzerrung.
-- ArUco-Detektion und Subpixel-Ecken (FR-06), Tape-Detektion per HSV (FR-08).
+- Generator für synthetische Bilder (FR-15): Biegelinie, gelbe Kugeln an den Enden, Tape-Mitte, ArUco im Hintergrund, Scheiben und Klemmen, Rauschen, Kamerarolle.
+- Detektion: ArUco-Referenz (FR-06), gelbe Kugeln über die Farbe (FR-07), Tape (FR-08), jeweils mit Subpixel-Schwerpunkt.
 - D1 aus drei Punkten, Ausgabe als Tidy-CSV.
 - **Demo für Zwischenpräsentation 1:** synthetisches Bild → erkannte Marker → Durchbiegung → Soll/Ist-Vergleich, plus kurze Vorstellung des Analyseplans.
 
 **Fertig, wenn:** auf 100 synthetischen Bildern mit bekannter Biegung liegt der absolute Fehler unter dem vorläufigen Zielwert (0,5 mm) bei ungestörten Bedingungen.
 
-**Ergebnis (700 synthetische Bilder, 1 px/mm, 0,3° Kamerarollen, Rauschen, Unschärfe):** Detektionsrate 100 %, Bias +0,02 mm, SD 0,07 mm, 95-%-LoA −0,12 bis +0,17 mm, maximaler Fehler 0,26 mm. Das gilt nur für ungestörte Bedingungen ohne Linsenverzerrung und Perspektive. Diese Störgrößen kommen in M2/M5 (V1) dazu.
+**Ergebnis (700 synthetische Bilder mit Scheiben/Klemmen, gelbe Kugeln, Hintergrund-ArUco, 1 px/mm, 0,3° Kamerarolle, Rauschen, Unschärfe):** Detektionsrate 100 %, Bias +0,03 mm, SD 0,02 mm, 95-%-LoA −0,01 bis +0,07 mm, maximaler Fehler 0,10 mm. Der Bias stammt aus der Skala des Markers (−0,3 %). Das gilt nur für ungestörte Bedingungen ohne Linsenverzerrung und Perspektive und mit dem Marker in der Stangenebene. Diese Störgrößen kommen in M2/M5 (V1) dazu.
 
 ## M2 – Kalibrierung und Skalierung (CW 43–45)
 - Intrinsische Kalibrierung mit Schachbrett/ChArUco, RMS-Reprojektionsfehler (FR-05).
-- Homographie über Referenzquadrat 10 × 10 cm oder ArUco bekannter Größe, px→mm (FR-09).
+- Skala über das Hintergrund-ArUco, Gegenprobe Referenzquadrat; Tiefenversatz der Markerebene als Unsicherheit (FR-09). Homographie/Perspektive.
 - Synthetische Linsenverzerrung und Perspektive in V1 einbauen; Korrektur gegen Ground Truth testen.
-- Kugelmarker-Detektor als Alternative hinter gleichem Interface (FR-07, wenn Feldtest es erfordert).
+- Linsenverzerrung im Simulator, Kalibrierung dagegen testen (ein einzelner zentraler Marker reicht dafür nicht).
 
 **Fertig, wenn:** Skala- und Verzerrungsfehler auf Synthetik quantifiziert, Kalibrierprotokoll für das echte Setup liegt als Vorlage vor.
 
@@ -70,7 +70,7 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 ## M4 – Echtdaten einspielen (Ziel spätestens CW 46)
 - Fotos ablegen (lokal), Manifest mit SHA-256 erzeugen, Datenbackup.
 - Erste Pilotauswertung (eine Stange, ein Run) → Detektionsparameter feinjustieren.
-- **Entscheidung Markerart (O2)** und Kamera-/Kalibrierprotokoll (O5) dokumentieren.
+- Markergröße, Kugeldurchmesser und Marker-Tiefe (O8) sowie Kamera-/Kalibrierprotokoll (O5) dokumentieren und in die Config eintragen.
 - Ergebnisdaten ins Git (`data/derived/`).
 
 **Fertig, wenn:** ≥ 95 % der Bilder werden ohne manuellen Eingriff erkannt, geflaggte Bilder sind nachvollziehbar behandelt.
@@ -114,7 +114,7 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 | Entscheidung | Spätestens | Blockiert |
 |---|---|---|
 | O1 Primäre Durchbiegungsdefinition (Vorschlag D1) | Ende M2 | Analyseplan, M6 |
-| O2 Markerart | M4 | Feintuning Detektion |
+| O8 Markergröße/Tiefe, Kugeldurchmesser | vor Fotoshooting | Skala (FR-09) |
 | O3 Baseline-Fotos (vor und nach Run) | vor Fotoshooting | H2 |
 | O5 Kamera/Kalibrierprotokoll | vor Fotoshooting | M2 mit Echtdaten |
 | O7 Akzeptanzschwelle | M5 | Validierungsurteil |
@@ -122,10 +122,10 @@ M8                                 ██ ██ ██ ▲ Upload (CW 1) ▲ Fi
 ## Zeitpuffer und Priorisierung bei Engpass
 1. **Unverzichtbar:** M1–M3, D1, V1/V2/V5, H1-Test, Linearität, Table 2, Kurven.
 2. **Wichtig:** V3, V4, Restverformung (H2), QC-Bericht.
-3. **Streichbar zuerst:** D2–D4-Vergleich, Kugelmarker, manueller Override, Mixed Models, DVC, Web-UI.
+3. **Streichbar zuerst:** D2–D4-Vergleich, manueller Override, Mixed Models, DVC, Web-UI.
 
 ## Nächste Schritte (diese Woche)
 1. M0 aufsetzen und committen.
-2. Synthetik-Generator + ArUco/Tape-Detektion für die Demo in CW 43.
+2. Demo für CW 43 mit dem neuen Markerkonzept (gelbe Kugeln, Hintergrund-ArUco).
 3. Offene Entscheidungen O1, O3, O5 mit den Betreuern klären, bevor fotografiert wird.
 4. Concept Draft und Slides auf 425 kg / 9 Stufen / ohne RQ2/H3 angleichen.

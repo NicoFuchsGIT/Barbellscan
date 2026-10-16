@@ -19,9 +19,9 @@ from joblib import Parallel, delayed
 from .config import AnalysisConfig, BarCatalog, BarModel
 
 ARUCO_DICT = cv2.aruco.DICT_4X4_50
-MARKER_IDS = {"left": 0, "right": 1}
-MARKER_SIZE_MM = 60.0
+ARUCO_ID = 0  # einzelner Referenzmarker im Hintergrund (Skala, später Verzerrung)
 MARKER_BORDER_MM = 10.0  # weiße Ruhezone um den Marker
+BALL_BGR = (0, 215, 255)  # gelbe Kugel an den Sleeve-Kappen (BGR)
 TAPE_WIDTH_MM = 40.0
 SLEEVE_DIAMETER_MM = 50.0
 TAPE_BGR = (255, 0, 255)
@@ -38,9 +38,14 @@ class SimParams:
     noise_sigma: float = 2.0
     roll_deg: float = 0.0
     brightness: float = 1.0
-    height_mm: float = 400.0
+    height_mm: float = 600.0
     margin_mm: float = 60.0
-    origin_frac: float = 0.45  # Lage der Auflagelinie von oben
+    origin_frac: float = 0.5  # Lage der Auflagelinie von oben
+    aruco_size_mm: float = 100.0  # Kantenlänge des Hintergrundmarkers
+    aruco_offset_mm: float = 140.0  # Höhe des Markermittelpunkts über der Auflagelinie
+    aruco_scale_ratio: float = 1.0  # Abbildungsmaßstab der Markerebene relativ zur Stangenebene
+    ball_diameter_mm: float = 50.0
+    ball_hang_mm: float = 0.0  # Kugelmittelpunkt hängt so weit unter dem Sleeve-Ende
     plates_per_side: int = 0  # 25-kg-Scheiben je Seite (0 = leere Stange)
     plate_thickness_mm: float = 28.0  # ANNAHME, am echten Satz nachmessen
     plate_diameter_mm: float = 450.0
@@ -79,6 +84,24 @@ def bend_profile(
     unit_d1 = y[0] - y[-1]
     y = y * (d1_mm / unit_d1)
     return np.interp(np.abs(x_mm), grid, y)
+
+
+def _blend_rect(canvas: np.ndarray, x0: float, x1: float, y0: float, y1: float, bgr) -> None:
+    """Achsenparalleles Rechteck mit exakter Flächenabdeckung je Pixel (Pixelmitten-Koordinaten).
+
+    ``cv2.fillPoly`` füllt das Innere ohne Antialiasing und rastet Kanten auf das Gitter ein.
+    """
+    ix0, ix1 = int(np.floor(x0 - 0.5)), int(np.ceil(x1 + 0.5))
+    iy0, iy1 = int(np.floor(y0 - 0.5)), int(np.ceil(y1 + 0.5))
+    xs = np.arange(ix0, ix1 + 1)
+    ys = np.arange(iy0, iy1 + 1)
+    cov_x = np.clip(np.minimum(xs + 0.5, x1) - np.maximum(xs - 0.5, x0), 0.0, 1.0)
+    cov_y = np.clip(np.minimum(ys + 0.5, y1) - np.maximum(ys - 0.5, y0), 0.0, 1.0)
+    alpha = (cov_y[:, None] * cov_x[None, :])[..., None]
+    roi = canvas[iy0 : iy1 + 1, ix0 : ix1 + 1].astype(np.float32)
+    canvas[iy0 : iy1 + 1, ix0 : ix1 + 1] = np.round(
+        roi * (1.0 - alpha) + np.array(bgr, np.float32) * alpha
+    ).astype(np.uint8)
 
 
 def _paste_marker(canvas: np.ndarray, patch: np.ndarray, cx: float, cy: float) -> None:
@@ -185,28 +208,35 @@ def render(
     # Mittenmarker: Klebeband (Rechteck um die Achse)
     cx, cy = to_px(0.0, float(ys_mm[len(ys_mm) // 2]))
     tw, th = TAPE_WIDTH_MM * s, (bar.shaft_diameter_mm + 4.0) * s
-    cv2.rectangle(
-        canvas,
-        (int(round(cx - tw / 2)), int(round(cy - th / 2))),
-        (int(round(cx + tw / 2)), int(round(cy + th / 2))),
-        TAPE_BGR,
-        thickness=-1,
-        lineType=cv2.LINE_AA,
-    )
+    _blend_rect(canvas, cx - tw / 2, cx + tw / 2, cy - th / 2, cy + th / 2, TAPE_BGR)
 
-    # ArUco-Marker an den Sleeve-Enden (hängend, bleiben aufrecht)
-    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
-    inner = int(round(MARKER_SIZE_MM * s))
-    border = int(round(MARKER_BORDER_MM * s))
-    centres = {"left": to_px(-half, float(ys_mm[0])), "right": to_px(half, float(ys_mm[-1]))}
-    for name, (mx, my) in centres.items():
-        img = cv2.aruco.generateImageMarker(dictionary, MARKER_IDS[name], inner)
-        img = cv2.copyMakeBorder(
-            img, border, border, border, border, cv2.BORDER_CONSTANT, value=255
+    # Gelbe Kugeln an den Sleeve-Enden (Mittelpunkt = Endpunkt, optional hängend)
+    r_ball = p.ball_diameter_mm / 2.0 * s
+    balls = {
+        "left": to_px(-half, float(ys_mm[0]) - p.ball_hang_mm),
+        "right": to_px(half, float(ys_mm[-1]) - p.ball_hang_mm),
+    }
+    for bx, by in balls.values():
+        cv2.circle(
+            canvas,
+            (int(round(bx * 16)), int(round(by * 16))),
+            int(round(r_ball * 16)),
+            BALL_BGR,
+            thickness=-1,
+            lineType=cv2.LINE_AA,
+            shift=4,
         )
-        _paste_marker(canvas, cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), mx, my)
 
-    points = {"left": centres["left"], "right": centres["right"], "centre": (cx, cy)}
+    # ArUco-Referenzmarker im Hintergrund, mittig über der Stange
+    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
+    inner = int(round(p.aruco_size_mm * p.aruco_scale_ratio * s))
+    border = int(round(MARKER_BORDER_MM * p.aruco_scale_ratio * s))
+    img = cv2.aruco.generateImageMarker(dictionary, ARUCO_ID, inner)
+    img = cv2.copyMakeBorder(img, border, border, border, border, cv2.BORDER_CONSTANT, value=255)
+    ax, ay = to_px(0.0, p.aruco_offset_mm)
+    _paste_marker(canvas, cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), ax, ay)
+
+    points = {**balls, "centre": (cx, cy), "aruco": (ax, ay)}
 
     # Kamerarollen
     if p.roll_deg:
@@ -246,6 +276,13 @@ def synthetic_d1_mm(
     return float(d1 * (1.0 + rng.normal(0.0, 0.01)))
 
 
+def plates_for_load(load_kg: float, bar_weight_kg: float = 20.0) -> int:
+    """25-kg-Scheiben je Seite: 20 kg = leere Stange, sonst Last = 25 + 50 * n (inkl. Klemmen)."""
+    if load_kg <= bar_weight_kg:
+        return 0
+    return int(round((load_kg - 25.0) / 50.0))
+
+
 def generate_dataset(
     out_dir: Path,
     bars: BarCatalog,
@@ -273,7 +310,14 @@ def generate_dataset(
         rng = np.random.default_rng(ss)
         factor = 1.0 + 0.05 * np.random.default_rng([seed, bar_ids.index(row.bar_id)]).normal()
         d1 = synthetic_d1_mm(bar, row.load_kg, factor, row.is_baseline, rng)
-        p = SimParams(**{**base.__dict__, "roll_deg": float(rng.normal(0.0, roll_sd_deg))})
+        n_plates = 0 if row.is_baseline else plates_for_load(row.load_kg)
+        p = SimParams(
+            **{
+                **base.__dict__,
+                "roll_deg": float(rng.normal(0.0, roll_sd_deg)),
+                "plates_per_side": n_plates,
+            }
+        )
         res = render(bar, d1, cfg.support_offset_mm, p, rng)
         tag = "baseline" if row.is_baseline else f"{row.load_kg:g}kg"
         rel = Path(row.bar_id) / f"run{row.run}_{tag}.jpg"
@@ -287,6 +331,7 @@ def generate_dataset(
             "image_path": rel.as_posix(),
             "image_sha256": sha256_of(out_dir / rel),
             "d1_true_mm": d1,
+            "plates_per_side": n_plates,
             "scale_px_per_mm": res.scale_px_per_mm,
             "roll_deg": p.roll_deg,
         }
