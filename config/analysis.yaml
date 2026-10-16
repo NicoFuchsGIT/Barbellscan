@@ -1,0 +1,9 @@
+# Studiendesign und Analyseparameter (PRD Abschnitte 5 und 8)
+loads_kg: [20, 75, 125, 175, 225, 275, 325, 375, 425]   # Maximallast auf 425 kg reduziert
+runs: 5
+baseline_after_unload: true      # Baseline-Foto nach Entlastung je Run (PRD O3)
+support_offset_mm: 371           # Auflagepunkte links/rechts vom Zentrum
+primary_definition: D1           # PRD O1, vor Sichtung der Echtdaten einfrieren
+sign_convention: ends_below_centre_positive
+alpha: 0.05
+seed: 20261016
