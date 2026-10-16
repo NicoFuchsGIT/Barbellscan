@@ -25,6 +25,9 @@ MARKER_BORDER_MM = 10.0  # weiße Ruhezone um den Marker
 TAPE_WIDTH_MM = 40.0
 SLEEVE_DIAMETER_MM = 50.0
 TAPE_BGR = (255, 0, 255)
+PLATE_BGR = (35, 35, 190)  # rote 25-kg-Scheibe
+PLATE_EDGE_BGR = (15, 15, 90)
+COLLAR_BGR = (45, 45, 45)
 
 
 @dataclass
@@ -38,6 +41,11 @@ class SimParams:
     height_mm: float = 400.0
     margin_mm: float = 60.0
     origin_frac: float = 0.45  # Lage der Auflagelinie von oben
+    plates_per_side: int = 0  # 25-kg-Scheiben je Seite (0 = leere Stange)
+    plate_thickness_mm: float = 28.0  # ANNAHME, am echten Satz nachmessen
+    plate_diameter_mm: float = 450.0
+    collar_width_mm: float = 30.0  # ANNAHME
+    collar_height_mm: float = 90.0  # ANNAHME
 
 
 @dataclass
@@ -91,6 +99,41 @@ def _paste_marker(canvas: np.ndarray, patch: np.ndarray, cx: float, cy: float) -
     canvas[iy - 1 : iy + p + 1, ix - 1 : ix + p + 1] = roi
 
 
+def _stack_polygon(xs_mm, ys_mm, x_c, width_mm, height_mm, to_px, s) -> np.ndarray:
+    """Rechteck (Breite entlang der Achse, Höhe senkrecht dazu) um den Achspunkt bei x_c."""
+    y_c = float(np.interp(x_c, xs_mm, ys_mm))
+    slope = float(np.interp(x_c, xs_mm, np.gradient(ys_mm, xs_mm)))
+    u = np.array([1.0, slope]) / np.hypot(1.0, slope)
+    v = np.array([-u[1], u[0]])
+    c = np.array([x_c, y_c])
+    corners = [
+        c + a * u * width_mm / 2 + b * v * height_mm / 2
+        for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+    ]
+    return np.array([to_px(*q) for q in corners])
+
+
+def _fill(canvas, poly, fill, edge, edge_px) -> None:
+    sub = np.round(poly * 16).astype(np.int32)
+    cv2.fillPoly(canvas, [sub], fill, lineType=cv2.LINE_AA, shift=4)
+    cv2.polylines(
+        canvas, [sub], True, edge, thickness=max(int(edge_px), 1), lineType=cv2.LINE_AA, shift=4
+    )
+
+
+def _draw_plates(canvas, bar, xs_mm, ys_mm, p: SimParams, to_px, s) -> None:
+    x0 = bar.shaft_length_mm / 2.0 + 5.0  # Anschlag am inneren Sleeve-Ende
+    t = p.plate_thickness_mm
+    for sign in (-1.0, 1.0):
+        for k in range(p.plates_per_side):
+            xc = sign * (x0 + (k + 0.5) * t)
+            poly = _stack_polygon(xs_mm, ys_mm, xc, t, p.plate_diameter_mm, to_px, s)
+            _fill(canvas, poly, PLATE_BGR, PLATE_EDGE_BGR, 1.0 * p.supersample)
+        xc = sign * (x0 + p.plates_per_side * t + p.collar_width_mm / 2)
+        poly = _stack_polygon(xs_mm, ys_mm, xc, p.collar_width_mm, p.collar_height_mm, to_px, s)
+        _fill(canvas, poly, COLLAR_BGR, (20, 20, 20), 1.0 * p.supersample)
+
+
 def render(
     bar: BarModel,
     d1_mm: float,
@@ -134,6 +177,10 @@ def render(
                     thickness=max(int(round(dia * s)), 1),
                     lineType=cv2.LINE_AA,
                 )
+
+    # Scheiben und Klemmen auf den Sleeves (Scheiben stehen senkrecht zur Stangenachse)
+    if p.plates_per_side > 0:
+        _draw_plates(canvas, bar, xs_mm, ys_mm, p, to_px, s)
 
     # Mittenmarker: Klebeband (Rechteck um die Achse)
     cx, cy = to_px(0.0, float(ys_mm[len(ys_mm) // 2]))
