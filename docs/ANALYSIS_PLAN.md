@@ -147,4 +147,6 @@ Formulierung im Ergebnis: „keine Abweichung oberhalb der Nachweisgrenze“, ni
 
 ## 11. Nachträge
 
-_Keine._
+**N1 (15.11.2026, vor Berechnung echter Durchbiegungen): Zuordnung der Marker geometrisch statt über die Blobgröße (betrifft 4.2).**
+Umsetzung: Zuerst werden Ringbänder und Mittenband als drei fast kollineare gelbe Blobs gesucht (Mitte genau zwischen den äußeren, Abstand der äußeren ≈ Ringabstand × nominaler Maßstab ± 30 %). Die Kugeln sind dann je Seite der Blob, der der aus Ringabstand und Kugelabstand (L + 70 mm) vorhergesagten Position am nächsten liegt, in einem Fenster unterhalb der Ringlinie. Ohne Ringbänder: äußerstes Blobpaar mit passendem Abstand als Kugeln, Flag `missing_ring`.
+Begründung: Bewegungsunschärfe (Handauslösung, 1/15 s) verändert Größe und Form der Blobs, und bei einer fehlenden Kugel (OhioDeadliftB9680) würde „die äußersten Blobs“ ein Ringband als Kugel wählen. Zielgrößen, Skala und Statistik bleiben unverändert.

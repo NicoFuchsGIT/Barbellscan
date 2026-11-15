@@ -1,36 +1,41 @@
 import pytest
 from pydantic import ValidationError
 
-from barbellscan.config import AnalysisConfig, load_analysis, load_bars
+from barbellscan.config import Detection, load_analysis, load_bars
 
 
-def test_catalog_matches_draft_table_1():
+def test_catalog_matches_analysis_plan():
     cat = load_bars()
     assert len(cat.bars) == 13
     cats = [b.category for b in cat.bars]
-    assert cats.count("power") == 9
-    assert cats.count("deadlift") == 3
-    assert cats.count("squat") == 1
+    assert (cats.count("power"), cats.count("deadlift")) == (8, 3)
+    assert (cats.count("squat"), cats.count("weightlifting")) == (1, 1)
+    assert cat.bar("zkc_iwf").ring_spacing_mm == 910
+    assert cat.by_prefix("Eleiko2016PowerTraining").bar_id == "eleiko_training_2016"
+    assert cat.by_prefix("StrengthShopDeadlift").bar_id == "bastard_deadlift"
 
 
-def test_two_squat_replicates_give_14_physical_bars():
-    ids = load_bars().bar_ids()
-    assert len(ids) == 14
-    assert {"texas_squat_1", "texas_squat_2"} <= set(ids)
+def test_ball_span_is_length_plus_two_offsets():
+    bar = load_bars().bar("eleiko_comp_2026")
+    assert bar.ball_span_mm(35.0) == pytest.approx(2270.0)
 
 
-def test_model_of_resolves_replicates():
-    cat = load_bars()
-    assert cat.model_of("texas_squat_2").model_id == "texas_squat"
-    assert cat.model_of("ohio_power").category == "power"
-
-
-def test_analysis_defaults():
+def test_schedule_up_and_down_with_added_mass():
     cfg = load_analysis()
-    assert cfg.loads_kg[0] == 20 and cfg.loads_kg[-1] == 425 and len(cfg.loads_kg) == 9
-    assert cfg.images_per_bar_run() == 10
+    steps = cfg.schedule()
+    assert len(steps) == 17 and cfg.peak_step == 8 and cfg.final_step == 16
+    masses = [s.added_mass_kg for s in steps]
+    assert masses[:9] == [0, 55, 105, 155, 205, 255, 305, 355, 405]
+    assert masses[9:] == masses[:8][::-1]
+    assert [s.phase for s in steps].count("up") == 9
 
 
-def test_loads_must_ascend():
+def test_geometry_from_manuscript():
+    g = load_analysis().geometry
+    assert g.support_offset_loaded_mm == pytest.approx(362.5)
+    assert (g.ball_diameter_mm, g.ball_offset_mm) == (15, 35)
+
+
+def test_roi_must_be_ordered():
     with pytest.raises(ValidationError):
-        AnalysisConfig(loads_kg=[75, 20], runs=5, support_offset_mm=371)
+        Detection(roi_frac=(0.5, 0.2, 0.4, 0.8))

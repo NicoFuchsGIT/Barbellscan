@@ -1,6 +1,6 @@
 # Roadmap – Barbellscan
 
-Stand: 16.10.2026 (CW 42). **M0 und M1 sind umgesetzt, als Nächstes folgt M2.** Abgeleitet aus dem Zeitplan (Table 3) im Concept Draft und dem [PRD](PRD.md). Die Reihenfolge ist so gewählt, dass **keine Phase auf echte Fotos warten muss**, bis die Pipeline steht.
+Stand: 15.11.2026 (CW 46). **M0 und M1 umgesetzt; Fotos liegen vor (663 Bilder, QC erledigt), [Analyseplan](ANALYSIS_PLAN.md) eingefroren. Umgesetzt: Manifest (`data/manifest.csv`), Detektion der echten gelben Marker, ΔD1 mit Skala aus den Ringbändern (`track`, `deflect`). Offen: Pilotlauf auf den echten Fotos (lokal), Plumb-Line-Prüfung der Restverzeichnung, Unsicherheitsbudget, Statistik (M6).** Die ursprüngliche Planung unten ist historisch. Abgeleitet aus dem Zeitplan (Table 3) im Concept Draft und dem [PRD](PRD.md). Die Reihenfolge ist so gewählt, dass **keine Phase auf echte Fotos warten muss**, bis die Pipeline steht.
 
 ## Überblick
 

@@ -5,7 +5,7 @@
 | **Projekt** | *Standardisation vs. Flexibility: A Quantitative Analysis of Barbell Deflection Under Heavy Loads Across Federation Regulations* (Human Factors and Sports Engineering, Wien) |
 | **Autor** | Nico Fuchs |
 | **Betreuer** | MSc. Markus Eckelt, MSc. Alexander Renner |
-| **Status** | v0.2 (16.10.2026, CW 42): Interview-Ergebnis, Markerkonzept aktualisiert. M0 und M1 umgesetzt (siehe [ROADMAP](ROADMAP.md)) |
+| **Status** | v0.2 (16.10.2026, CW 42): Interview-Ergebnis, Markerkonzept aktualisiert. M0 und M1 umgesetzt (siehe [ROADMAP](ROADMAP.md)). **Seit 15.11.2026 gilt bei Widersprüchen der [Analyseplan](ANALYSIS_PLAN.md) (Design, Marker, Zielgrößen, Statistik).** |
 | **Quellen** | Concept Draft (.docx), Draft-Präsentation (.pptx), Creo-Modell Sleeve-Aufsatz (`kk.prt`) |
 
 ---
