@@ -160,3 +160,16 @@ Umsetzung, **für alle Bänder in allen Fotos gleich** (ein Methodenwechsel inne
 4. Flag `tape_hanging_<marker>`, wenn das Band höher als 1,3 × (d + 2 · Bandstärke) ist.
 Konstante Restfehler (Annahme Bandstärke, Schattierung der Oberkante) kürzen sich in ΔD1 und ΔD_ring heraus.
 Sensitivitätsanalyse: Die bisherige Schwerpunktmethode wird weiter berechnet (`d1_px_centroid`, `delta_d1_centroid_mm`, `compliance_centroid_mm_per_100kg`). Validierung auf Synthetik: Achse auf ≤ 0,2 px (x) bzw. ≤ 0,05 px (y), D1-Fehler ≤ 0,05 mm, auch mit 40 mm Lappen und geneigtem Schaft.
+
+**N3 (15.11.2026, vor Berechnung echter Durchbiegungen): Linearität gegen das Lastmoment und an ΔD_ring (betrifft 6.3 Nr. 1).**
+Anlass: Jede weitere Scheibe sitzt um eine Scheibendicke (27 mm) weiter außen, der Hebelarm der Last wächst also mit der Scheibenzahl. Ein ideal elastischer Balken (Euler-Bernoulli, Auflager ±362,5 mm) ist deshalb gegen die Zusatzmasse gekrümmt: Power-Stange 9,5 mm/100 kg bei der ersten und 16,8 mm/100 kg bei der letzten Stufe, Abweichung von der Geraden rund 2,5 mm. Das ursprüngliche Kriterium (quadratischer Term von ΔD1 gegen die Masse ≤ MDC95) wäre rein geometrisch verletzt und sagt nichts über das Material.
+Umsetzung:
+1. Regressor ist das **Lastmoment** um die Auflager, `M = 2 · Σ mᵢ · (xᵢ − 362,5 mm)` in kg·m, mit dem Scheibenschwerpunkt `xᵢ = Sleeve-Anschlag + (i − ½) · 27 mm` und der Klemme 15 mm hinter der letzten Scheibe (`load_moment_kgm`; Scheibendicke und Klemmenlage sind Annahmen in `config/analysis.yaml` und werden nachgemessen).
+2. Zielgröße des Kriteriums ist **ΔD_ring** (Sehne durch die Ringbänder). Zwischen den Auflagern ist das Biegemoment nach der Statik genau M · g, unabhängig von Überhang, Sleeve-Lagerung und Kappe; ΔD_ring ist dort exakt proportional zu M (Balkenmodell: Abweichung < 0,01 mm).
+3. Kriterium: Differenz zwischen quadratischem und linearem Fit von ΔD_ring gegen M bei 8 Scheiben (Belastungsast, Mittel der 3 Zyklen) ≤ MDC95 von ΔD_ring(405 kg).
+4. Deskriptiv weiter berichtet: dieselbe Größe für ΔD1 gegen M (`nonlin_d1_moment_mm`; enthält die Biegung im Lastbereich und ist auch im Modell nicht null, 0,3–0,7 mm) und für ΔD1 gegen die Masse (`nonlin_at_peak_mm`).
+Unverändert: primäre Zielgröße c (OLS von ΔD1 gegen die Zusatzmasse) und H1. c ist damit eine scheinbare Nachgiebigkeit für genau dieses Beladungsschema; der Vergleich zwischen den Stangen bleibt gültig, weil alle gleich beladen wurden.
+Grenze: Das Moment setzt die Auflage an den Hook-Außenkanten voraus. Liegt die Stange bei kleiner Last weiter innen auf, entsteht bei den ersten Stufen eine kleine Abweichung; sie wird über eine Sensitivitätsrechnung mit ±325 mm abgeschätzt.
+
+**N4 (15.11.2026): Ausschlussliste (Klarstellung zu Abschnitt 7, keine neue Regel).**
+Bilder mit dokumentiertem Detektionsfehler stehen mit Begründung in `data/exclusions.csv` (`image, reason`) und werden als fehlender Wert behandelt (`exclusion_reason`, Flag `excluded`). Sensitivitätsanalysen ohne geflaggte Bilder laufen über `deflect --drop-qc-flag <flag>`.

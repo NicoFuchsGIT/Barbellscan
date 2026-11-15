@@ -15,6 +15,8 @@ geometry:
   ball_offset_mm: 35       # Kugelmitte hinter der Sleeve-Stirnfläche (Kugelabstand = L + 70)
   tape_width_mm: 14        # gelbe Bänder (Mitte, Ringmarkierungen)
   tape_thickness_mm: 0.15  # Isolierband (ANNAHME); Achse = Band-Oberkante - (d/2 + Stärke)
+  plate_thickness_mm: 27   # 25-kg-Scheibe (ANNAHME, bitte nachmessen); für das Lastmoment (Nachtrag N3)
+  collar_centre_mm: 15     # Schwerpunkt der Klemme hinter der letzten Scheibe (ANNAHME)
 
 # --- Detektion (Plan Abschnitt 4) ---
 detection:
