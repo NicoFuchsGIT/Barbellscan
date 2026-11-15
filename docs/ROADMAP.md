@@ -28,7 +28,8 @@ Stand: 15.11.2026 (CW 46). Maßgeblich für Inhalt und Methode ist der [Analysep
 | Plumb-Line-Prüfung der Restverzeichnung (Plan 4.4) | ❌ |
 | Unsicherheitsbudget mit Monte-Carlo (Plan 6.4) | ❌ |
 | Balkenmodell als Gegenprobe (V4) | ❌ (Rechenkern liegt als Testhilfe in `tests/test_stats.py`) |
-| Abbildungen und Tabellen fürs Paper (`report`) | ❌ |
+| Abbildungen (`plot` → `data/plots/`): Kurven je Stange, Nachgiebigkeit, H1, H2 | ✅ |
+| Tabellen fürs Paper als LaTeX, alles aus einem Befehl (`report`) | ❌ |
 
 Geprüft in Echtgröße (6000 × 3376 px, 2,36 px/mm, echte ROI, Roll −0,5°, alle 13 Stangen): D1-Fehler ≤ 0,02 mm, auch mit 21 px vertikaler Bewegungsunschärfe und mit der kürzeren Texas-Deadlift-Stange. Das gilt für dunklen, neutralen Hintergrund ohne Linsenverzeichnung.
 

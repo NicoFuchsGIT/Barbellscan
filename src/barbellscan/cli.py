@@ -197,6 +197,36 @@ def stats(
 
 
 @app.command()
+def plot(
+    deflection: Path = Path("data/derived/deflection.csv"),
+    cycles: Path = Path("data/derived/cycle_summary.csv"),
+    stats_dir: Path = Path("data/derived/stats"),
+    out_dir: Path = Path("data/plots"),
+    bars: Path = BARS,
+    fmt: Annotated[
+        list[str] | None, typer.Option(help="Dateiformat (mehrfach angebbar), z. B. png, pdf, svg")
+    ] = None,
+) -> None:
+    """Abbildungen aus den Tabellen von `deflect` und `stats` (Kurven, Nachgiebigkeit, H1, H2)."""
+    from .plots import make_all
+
+    tables = {p.stem: pd.read_csv(p) for p in sorted(stats_dir.glob("*.csv"))}
+    if not tables:
+        typer.echo(f"Keine Statistik-Tabellen in {stats_dir}: erst `barbellscan stats` ausführen.")
+    paths = make_all(
+        pd.read_csv(deflection, dtype={"cycle": str}),
+        pd.read_csv(cycles, dtype={"cycle": str}),
+        tables,
+        load_bars(bars),
+        out_dir,
+        tuple(fmt or ["png"]),
+    )
+    for path in paths:
+        typer.echo(f"  {path}")
+    typer.echo(f"{len(paths)} Abbildungen -> {out_dir}")
+
+
+@app.command()
 def compare(
     deflection: Path = Path("data/derived/deflection.csv"),
     truth: Path = Path("data/synthetic/truth.csv"),

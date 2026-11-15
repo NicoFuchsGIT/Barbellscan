@@ -20,6 +20,7 @@ uv run barbellscan check-manifest --verify --image-root "C:\Users\nico2\Desktop\
 uv run barbellscan track --image-root "C:\Users\nico2\Desktop\Bilder\umbenannt" --overlay-dir outputs/overlays
 uv run barbellscan deflect
 uv run barbellscan stats
+uv run barbellscan plot
 ```
 
 | Befehl | Ergebnis |
@@ -28,6 +29,7 @@ uv run barbellscan stats
 | `track` | `data/derived/tracking.csv`: Markerpositionen (px; Bänder als Schwerpunkt in der Schaftzone, herabhängende Bandenden zählen nicht mit), Kugel-/Ringabstand, `d1_px`, `dring_px`, Detektions-Flags (u. a. `tape_hanging_*`, `missing_*`); mit `--overlay-dir` ein QC-Bild je Foto |
 | `deflect` | `data/derived/deflection.csv` (Skala je Zyklus, D1, ΔD1, ΔD_ring in mm), `cycle_summary.csv` (Nachgiebigkeit, ΔD1 bei 405 kg, Restverformung, Hysterese je Zyklus), `bar_summary.csv` (je Stange) |
 | `stats` | `data/derived/stats/`: `h1.csv` (exakter Permutationstest Deadlift vs. Power), `bars.csv` (Kenngrößen je Stange mit 95-%-KI), `categories.csv`, `pairs.csv` (Welch-Differenzen innerhalb eines Typs), `reliability.csv` (ICC(1,1), SEM, MDC95), `h2.csv` (Linearität, Restverformung, Hysterese gegen MDC95) |
+| `plot` | `data/plots/`: `load_deflection_grid.png` (ΔD1 gegen Zusatzmasse je Stange, Be- und Entlastung), `load_deflection_overview.png` (alle Stangen in einem Bild), `dring_vs_moment_grid.png` (ΔD_ring gegen Lastmoment), `compliance_by_bar.png` (Nachgiebigkeit mit 95-%-KI), `h1_groups.png`, `h2_elasticity.png` (Linearität, Restverformung, Hysterese gegen MDC95); `--fmt pdf --fmt png` für weitere Formate |
 | `overlay <bild> --bar <bar_id>` | QC-Bild für ein einzelnes Foto (zum Justieren von ROI/Schwellen in `config/analysis.yaml`) |
 
 Bilder mit dokumentiertem Detektionsfehler (im Overlay nachvollziehbar) kommen mit Begründung in `data/exclusions.csv` (`image,reason`); `deflect` behandelt sie als fehlenden Wert. Sensitivitätsanalyse ohne unscharfe Bilder:
