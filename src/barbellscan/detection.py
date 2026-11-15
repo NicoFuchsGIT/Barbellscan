@@ -10,6 +10,12 @@ zwei Bänder auf den Ringmarkierungen. Zuordnung über die Geometrie, nicht übe
    (Kugelabstand L + 70 mm) am nächsten liegt, innerhalb eines Suchfensters unterhalb der
    Ringlinie (Enden hängen herab).
 
+Bänder (Mitte, Ringe) liefern die **Schaftachse**, nicht den Schwerpunkt der gelben Fläche
+(ANALYSIS_PLAN Nachtrag N2): Oberkante des Bandes (Subpixel, je Spalte) -> lokale Neigung und
+Schnittpunkt mit der Bandmittellinie, dann um den Schaftradius senkrecht nach unten. Ein
+gelöstes, herabhängendes Bandende verändert die Oberkante nicht. Der Schwerpunkt wird zur
+Sensitivitätsanalyse weiter ausgegeben (``Blob.centroid_xy``).
+
 Fehlt ein Marker, bleibt er leer und wird geflaggt; es wird nie ein Fehler ausgelöst.
 """
 
@@ -23,13 +29,28 @@ import numpy as np
 from .config import Detection
 
 MARKERS = ("left", "ring_left", "centre", "ring_right", "right")
+TAPES = ("ring_left", "centre", "ring_right")
+HANGING_FACTOR = 1.3  # Bandhöhe > 1,3 x Schaftdurchmesser => Bandende hängt herab
 
 
 @dataclass
 class Blob:
-    xy: tuple[float, float]
+    xy: tuple[float, float]  # Messpunkt: Kugelmitte bzw. Schaftachse unter dem Band
     mass: float
     area: int
+    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)  # x0, y0, x1, y1 (Vollbild, exklusiv)
+    centroid_xy: tuple[float, float] | None = None  # Schwerpunkt der gelben Fläche
+
+
+@dataclass
+class TapeFit:
+    top_xy: tuple[float, float]  # Bandmittellinie geschnitten mit der Schaftoberkante
+    direction: tuple[float, float]  # lokale Schaftrichtung (Einheitsvektor, x > 0)
+    height_px: float  # Bandhöhe (80. Perzentil über die Spalten)
+
+    def axis_point(self, radius_px: float) -> tuple[float, float]:
+        ux, uy = self.direction
+        return self.top_xy[0] - radius_px * uy, self.top_xy[1] + radius_px * ux
 
 
 @dataclass
@@ -96,8 +117,146 @@ def find_blobs(image: np.ndarray, params: Detection, ball_diameter_mm: float = 1
         res = _roi_centroid(w, region, pad)
         if res is not None:
             (cx, cy), mass = res
-            blobs.append(Blob((cx + x0, cy + y0), mass, area))
+            bx, by, bw, bh = cv2.boundingRect(region)
+            bbox = (bx + x0, by + y0, bx + bw + x0, by + bh + y0)
+            blobs.append(Blob((cx + x0, cy + y0), mass, area, bbox, (cx + x0, cy + y0)))
     return sorted(blobs, key=lambda b: b.xy[0])
+
+
+def _first_crossing(profile: np.ndarray, thr: float) -> float | None:
+    """Erste Stelle (Subpixel, Pixelmitten-Koordinaten), an der ``profile`` ``thr`` erreicht."""
+    idx = np.flatnonzero(profile >= thr)
+    if len(idx) == 0 or idx[0] == 0:
+        return None  # kein Rand oder Rand am Ausschnittrand (unzuverlässig)
+    i = int(idx[0])
+    p0, p1 = float(profile[i - 1]), float(profile[i])
+    return i - 1 + (thr - p0) / (p1 - p0)
+
+
+def _edge_from_area(prof: np.ndarray, i_cross: int, k: int) -> float | None:
+    """Kantenlage aus der Fläche unter dem Profil (exakt bei Antialiasing und symmetrischer
+    Unschärfe): Kante = Fensterende + 0,5 - Summe(Profil) / Plateau."""
+    a, b = i_cross - k, i_cross + k
+    if a < 0 or b + 2 * k > len(prof):
+        return None
+    plateau = float(np.median(prof[b : b + 2 * k]))
+    if plateau <= 0:
+        return None
+    return b + 0.5 - float(prof[a : b + 1].sum()) / plateau
+
+
+def measure_tape(
+    image: np.ndarray, blob: Blob, radius_px: float, scale_px_per_mm: float
+) -> TapeFit | None:
+    """Oberkante, lokale Neigung und Höhe eines Bandes (ohne den herabhängenden Teil).
+
+    Je Spalte im Inneren des Bandes: Oberkante aus der Fläche unter dem Gelbprofil
+    (Subpixel), Unterkante inkl. Lappen grob über den Halbwert. Gerade durch die Oberkanten
+    -> Neigung. Die Bandmittellinie kommt aus dem Schwerpunkt der Zone zwischen Oberkante und
+    Oberkante + Schaftradius (ein Lappen hängt unterhalb und zählt nicht mit).
+    """
+    k = max(4, int(round(4 * scale_px_per_mm)))  # halbe Fensterbreite für die Kante (~4 mm)
+    pad = 2 * k + 2
+    h, w_img = image.shape[:2]
+    x0, y0, x1, y1 = blob.bbox
+    x0, y0 = max(x0 - pad, 0), max(y0 - pad, 0)
+    x1, y1 = min(x1 + pad, w_img), min(y1 + pad, h)
+    w = np.maximum(yellow_weight(image[y0:y1, x0:x1]), 0.0).astype(np.float64)
+    colmax = w.max(axis=0)
+    if colmax.max() <= 0:
+        return None
+    # Nur Spalten mit vollem Gelbanteil (keine angeschnittenen Bandränder)
+    plateau_cols = np.flatnonzero(colmax >= 0.9 * colmax.max())
+    rough = {}
+    for j in plateau_cols:
+        prof = w[:, j]
+        cross = _first_crossing(prof, 0.5 * prof.max())
+        bottom = _first_crossing(prof[::-1], 0.5 * prof.max())
+        if cross is not None and bottom is not None:
+            rough[j] = (cross, len(prof) - 1 - bottom)
+    if len(rough) < 3:
+        return None
+    # Oberste Spaltengruppe = Band; Spalten, die nur den herabhängenden Lappen enthalten,
+    # beginnen erst an der Bandunterseite und fallen heraus.
+    tol = 0.3 * radius_px
+    rough_tops = np.array([t for t, _ in rough.values()])
+    need = max(3, int(0.3 * len(rough)))
+    group_size = [((rough_tops >= t) & (rough_tops <= t + tol)).sum() for t in np.sort(rough_tops)]
+    first = next((i for i, n in enumerate(group_size) if n >= need), None)
+    if first is None:
+        return None
+    ref = float(np.sort(rough_tops)[first])
+    edge = {}
+    for j, (cross, bottom) in rough.items():
+        if ref <= cross <= ref + tol:
+            top = _edge_from_area(w[:, j], int(np.ceil(cross)), k)
+            if top is not None:
+                edge[j] = (top, bottom)
+    if len(edge) < 3:
+        return None
+    # Gerade zuerst nur durch die mittlere Hälfte (bei geneigtem Band liegen in den Randspalten
+    # die schrägen Seitenkanten), dann alle Spalten, die auf der Geraden liegen.
+    cols = np.array(sorted(edge))
+    tops_all = np.array([edge[j][0] for j in cols])
+    mid, quarter = np.median(cols), max(1.0, (cols.max() - cols.min() + 1) / 4)
+    core = np.abs(cols - mid) <= quarter
+    if core.sum() < 3:
+        core = np.ones_like(cols, bool)
+    slope, icpt = np.polyfit(cols[core], tops_all[core], 1)
+    on_line = np.abs(tops_all - (icpt + slope * cols)) < 0.5
+    if on_line.sum() >= 3:
+        slope, icpt = np.polyfit(cols[on_line], tops_all[on_line], 1)
+    heights = [edge[j][1] - edge[j][0] for j in cols]
+    u = np.array([1.0, slope]) / np.hypot(1.0, slope)
+    n_down = np.array([-u[1], u[0]])
+    yy, xx = np.mgrid[0 : w.shape[0], 0 : w.shape[1]]
+    zone = w * (yy <= icpt + slope * xx + radius_px)
+    m = zone.sum()
+    if m <= 0:
+        return None
+    q = np.array([(zone * xx).sum() / m, (zone * yy).sum() / m])
+    t = (icpt + slope * q[0] - q[1]) / (n_down[1] - slope * n_down[0])
+    top_xy = q + t * n_down
+    return TapeFit(
+        (float(top_xy[0] + x0), float(top_xy[1] + y0)),
+        (float(u[0]), float(u[1])),
+        float(np.percentile(heights, 80)),
+    )
+
+
+def _refine_tapes(
+    image: np.ndarray,
+    out: Markers,
+    radius_mm: float,
+    band_mm: float,
+    scale0: float,
+    ring_spacing_mm: float,
+) -> None:
+    """Ersetzt die Band-Schwerpunkte durch Punkte auf der Schaftachse (Plan, Nachtrag N2).
+
+    Der Radius in px kommt aus dem Ringabstand im selben Bild (eine Iteration ab ``scale0``).
+    """
+    fits = {}
+    for name in TAPES:
+        blob = out.points[name]
+        if blob is None:
+            continue
+        fit = measure_tape(image, blob, radius_mm * scale0, scale0)
+        if fit is None:
+            out.flags.append(f"tape_fit_failed_{name}")  # Schwerpunkt bleibt Messpunkt
+        else:
+            fits[name] = fit
+    scale = scale0
+    for _ in range(2):
+        pts = {name: fit.axis_point(radius_mm * scale) for name, fit in fits.items()}
+        if "ring_left" in pts and "ring_right" in pts:
+            scale = float(np.hypot(*np.subtract(pts["ring_right"], pts["ring_left"])))
+            scale /= ring_spacing_mm
+    for name, fit in fits.items():
+        blob = out.points[name]
+        out.points[name] = Blob(pts[name], blob.mass, blob.area, blob.bbox, blob.centroid_xy)
+        if fit.height_px > HANGING_FACTOR * band_mm * scale:
+            out.flags.append(f"tape_hanging_{name}")
 
 
 def _shaft_triple(blobs: list[Blob], ring_px: float, tol: float):
@@ -147,15 +306,20 @@ def detect_markers(
     ball_span_mm: float,
     params: Detection,
     ball_diameter_mm: float = 15.0,
+    shaft_diameter_mm: float = 29.0,
+    tape_thickness_mm: float = 0.0,
 ) -> Markers:
     """Sucht die fünf gelben Marker einer Stange mit bekannter Geometrie."""
     out = Markers()
+    s0 = params.nominal_px_per_mm
     blobs = find_blobs(image, params, ball_diameter_mm)
     tol = params.scale_tolerance
-    triple = _shaft_triple(blobs, ring_spacing_mm * params.nominal_px_per_mm, tol)
+    radius_mm = shaft_diameter_mm / 2 + tape_thickness_mm
+    triple = _shaft_triple(blobs, ring_spacing_mm * s0, tol)
     if triple is not None:
-        a, b, c = triple
-        out.points.update(ring_left=a, centre=b, ring_right=c)
+        out.points.update(dict(zip(TAPES, triple, strict=True)))
+        _refine_tapes(image, out, radius_mm, 2 * radius_mm, s0, ring_spacing_mm)
+        a, b, c = (out.points[n] for n in TAPES)
         vec = np.subtract(c.xy, a.xy)
         span = float(np.linalg.norm(vec))
         ring_dir = vec / span
@@ -164,7 +328,11 @@ def detect_markers(
             out.points[name] = _find_ball(blobs, triple, b.xy, ring_dir, side, half_px)
     else:
         out.flags.append("missing_ring")
-        _fallback_balls_centre(out, blobs, ball_span_mm * params.nominal_px_per_mm, tol)
+        _fallback_balls_centre(out, blobs, ball_span_mm * s0, tol)
+        left, right = out.points["left"], out.points["right"]
+        if left is not None and right is not None:
+            scale = float(np.hypot(*np.subtract(right.xy, left.xy))) / ball_span_mm
+            _refine_tapes(image, out, radius_mm, 2 * radius_mm, scale, ring_spacing_mm)
     for name in MARKERS:
         if out.points[name] is None and not (
             name.startswith("ring") and "missing_ring" in out.flags

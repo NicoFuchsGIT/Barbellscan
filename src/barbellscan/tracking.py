@@ -17,7 +17,7 @@ from joblib import Parallel, delayed
 
 from .config import AnalysisConfig, Bar, BarCatalog
 from .deflection import chord_offset_px
-from .detection import MARKERS, detect_markers, roi_px
+from .detection import MARKERS, TAPES, detect_markers, roi_px
 from .manifest import resolve_image
 
 RESULT_COLUMNS = [
@@ -26,6 +26,10 @@ RESULT_COLUMNS = [
     "ring_dist_px",
     "d1_px",
     "dring_px",
+    # Sensitivitätsanalyse: Bänder über den Schwerpunkt der gelben Fläche statt Schaftachse
+    *(f"{m}_{c}" for m in TAPES for c in ("cx", "cy")),
+    "d1_px_centroid",
+    "dring_px_centroid",
     "detect_flags",
 ]
 
@@ -45,12 +49,20 @@ def track_image(image: np.ndarray, bar: Bar, cfg: AnalysisConfig, full_frame: bo
         params = params.model_copy(update={"roi_frac": None})
     g = cfg.geometry
     found = detect_markers(
-        image, bar.ring_spacing_mm, bar.ball_span_mm(g.ball_offset_mm), params, g.ball_diameter_mm
+        image,
+        bar.ring_spacing_mm,
+        bar.ball_span_mm(g.ball_offset_mm),
+        params,
+        g.ball_diameter_mm,
+        bar.shaft_diameter_mm,
+        g.tape_thickness_mm,
     )
     row: dict = dict.fromkeys(RESULT_COLUMNS, np.nan)
     for name, blob in found.points.items():
         if blob is not None:
             row[f"{name}_x"], row[f"{name}_y"] = blob.xy
+            if name in TAPES and blob.centroid_xy is not None:
+                row[f"{name}_cx"], row[f"{name}_cy"] = blob.centroid_xy
     left, right, centre = _pt(row, "left"), _pt(row, "right"), _pt(row, "centre")
     rl, rr = _pt(row, "ring_left"), _pt(row, "ring_right")
     if _valid(left, right):
@@ -61,6 +73,15 @@ def track_image(image: np.ndarray, bar: Bar, cfg: AnalysisConfig, full_frame: bo
         row["d1_px"] = chord_offset_px(left, right, centre)
     if _valid(rl, rr, centre):
         row["dring_px"] = chord_offset_px(rl, rr, centre)
+    cc = (row["centre_cx"], row["centre_cy"])
+    rlc, rrc = (
+        (row["ring_left_cx"], row["ring_left_cy"]),
+        (row["ring_right_cx"], row["ring_right_cy"]),
+    )
+    if _valid(left, right, cc):
+        row["d1_px_centroid"] = chord_offset_px(left, right, cc)
+    if _valid(rlc, rrc, cc):
+        row["dring_px_centroid"] = chord_offset_px(rlc, rrc, cc)
     row["detect_flags"] = ";".join(found.flags)
     return row
 

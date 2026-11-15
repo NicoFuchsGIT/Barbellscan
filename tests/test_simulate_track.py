@@ -4,8 +4,8 @@ import pytest
 
 from barbellscan.config import load_analysis, load_bars
 from barbellscan.deflection import add_deflection, bar_summary, chord_offset_px, cycle_summary
-from barbellscan.detection import roi_px
-from barbellscan.simulate import SimParams, bend_profile, render
+from barbellscan.detection import Blob, measure_tape, roi_px
+from barbellscan.simulate import SimParams, _fill_exact, bend_profile, render
 from barbellscan.tracking import draw_overlay, track_image
 from barbellscan.validation import compare_to_truth
 
@@ -63,11 +63,42 @@ def test_tracking_recovers_deflection_and_ring_scale(bar_id, d1, plates):
     assert row["dring_px"] / scale == pytest.approx(res.dring_mm, abs=0.2)
 
 
-def test_marker_centroids_match_truth_to_subpixel():
+def test_marker_points_match_truth_to_subpixel():
+    """Kugeln: Mittelpunkt; Bänder: Punkt auf der Schaftachse (Plan, Nachtrag N2)."""
     res = _render("texas_deadlift", 80.0, plates_per_side=6, roll_deg=0.3)
     row = _track(res, "texas_deadlift")
     for name, truth in res.points_px.items():
-        assert np.allclose((row[f"{name}_x"], row[f"{name}_y"]), truth, atol=0.15), name
+        assert np.allclose((row[f"{name}_x"], row[f"{name}_y"]), truth, atol=0.2), name
+
+
+@pytest.mark.parametrize("theta", [0.0, 0.05, -0.1, 0.15])
+def test_tape_axis_from_top_edge_is_exact_for_tilted_band(theta):
+    r = 14.65
+    img = np.full((140, 200, 3), 45, np.uint8)
+    c = np.array([100.3, 70.2])
+    u = np.array([np.cos(theta), np.sin(theta)])
+    n = np.array([-u[1], u[0]])
+    for half_len, half_h, col in ((90, 14.5, (150, 148, 145)), (7, r, (20, 210, 245))):
+        corners = [
+            c + a * u * half_len + b * n * half_h for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+        ]
+        _fill_exact(img, np.array(corners), col)
+    fit = measure_tape(img, Blob(tuple(c), 1.0, 1, (88, 50, 114, 90)), r, 1.0)
+    assert np.allclose(fit.axis_point(r), c, atol=0.05)
+    assert np.arctan2(fit.direction[1], fit.direction[0]) == pytest.approx(theta, abs=0.005)
+
+
+@pytest.mark.parametrize("angle", [8.0, -25.0])
+def test_hanging_tape_does_not_bias_axis_and_is_flagged(angle):
+    flaps = {"centre": 30.0, "ring_left": 25.0}
+    res = _render("ohio_power", 70.0, plates_per_side=8, roll_deg=0.4, tape_flaps_mm=flaps,
+                  flap_angle_deg=angle)  # fmt: skip
+    row = _track(res, "ohio_power")
+    assert set(row["detect_flags"].split(";")) == {"tape_hanging_centre", "tape_hanging_ring_left"}
+    scale = row["ring_dist_px"] / 810
+    assert row["d1_px"] / scale == pytest.approx(70.0, abs=0.15)
+    assert row["dring_px"] / scale == pytest.approx(res.dring_mm, abs=0.15)
+    assert row["d1_px_centroid"] / scale < 70.0 - 5.0  # Schwerpunkt wäre stark verfälscht
 
 
 def test_monolift_knobs_are_ignored_without_roi():

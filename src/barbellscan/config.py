@@ -70,6 +70,7 @@ class Geometry(BaseModel):
     ball_diameter_mm: float = Field(default=15.0, gt=0)
     ball_offset_mm: float = Field(default=35.0, ge=0)
     tape_width_mm: float = Field(default=14.0, gt=0)
+    tape_thickness_mm: float = Field(default=0.15, ge=0)
 
     @property
     def support_offset_loaded_mm(self) -> float:

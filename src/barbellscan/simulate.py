@@ -49,6 +49,8 @@ class SimParams:
     collar_width_mm: float = 30.0
     collar_height_mm: float = 90.0
     distractors: bool = True  # gelbe Monolift-Knöpfe
+    tape_flaps_mm: dict[str, float] = field(default_factory=dict)  # gelöstes Bandende je Marker
+    flap_angle_deg: float = 8.0
 
 
 @dataclass
@@ -102,6 +104,30 @@ def _fill(canvas, poly, fill, edge=None, edge_px=1) -> None:
     cv2.fillPoly(canvas, [sub], fill, lineType=cv2.LINE_AA, shift=4)
     if edge is not None:
         cv2.polylines(canvas, [sub], True, edge, max(int(edge_px), 1), cv2.LINE_AA, shift=4)
+
+
+def _fill_exact(canvas: np.ndarray, poly: np.ndarray, bgr) -> None:
+    """Konvexes Viereck mit Flächenabdeckung je Pixel (Pixelmitten-Koordinaten).
+
+    ``cv2.fillPoly`` bläht Flächen um bis zu ein halbes Pixel auf; für die Bänder, deren
+    Oberkante gemessen wird, wäre das ein systematischer Fehler der Ground Truth.
+    """
+    poly = np.asarray(poly, np.float64)
+    centre = poly.mean(axis=0)
+    x0, y0 = np.floor(poly.min(axis=0)).astype(int) - 1
+    x1, y1 = np.ceil(poly.max(axis=0)).astype(int) + 2
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float64)
+    cov = np.ones_like(xx)
+    for a, b in zip(poly, np.roll(poly, -1, axis=0), strict=True):
+        e = b - a
+        n = np.array([e[1], -e[0]]) / np.hypot(*e)
+        if (centre - a) @ n < 0:
+            n = -n  # Normale nach innen
+        d = (xx - a[0]) * n[0] + (yy - a[1]) * n[1]
+        cov *= np.clip(d + 0.5, 0.0, 1.0)
+    roi = canvas[y0:y1, x0:x1].astype(np.float32)
+    alpha = cov[..., None].astype(np.float32)
+    canvas[y0:y1, x0:x1] = np.round(roi * (1 - alpha) + np.float32(bgr) * alpha).astype(np.uint8)
 
 
 def _circle(canvas, cx, cy, r, bgr) -> None:
@@ -173,8 +199,8 @@ def render(
             poly = _rect_on_axis(xs_mm, ys_mm, xc, p.collar_width_mm, p.collar_height_mm, to_px)
             _fill(canvas, poly, COLLAR_BGR)
 
-    # Gelbe Bänder: Mitte und Ringmarkierungen (umlaufend, etwas dicker als der Schaft)
-    tape_h = bar.shaft_diameter_mm + 1.0
+    # Gelbe Bänder: Mitte und Ringmarkierungen (umlaufend, Schaft + 2 x Bandstärke)
+    tape_h = bar.shaft_diameter_mm + 2 * g.tape_thickness_mm
     tapes = {
         "centre": 0.0,
         "ring_left": -bar.ring_spacing_mm / 2,
@@ -182,8 +208,16 @@ def render(
     }
     points = {}
     for name, xt in tapes.items():
-        _fill(canvas, _rect_on_axis(xs_mm, ys_mm, xt, g.tape_width_mm, tape_h, to_px), YELLOW_BGR)
+        poly = _rect_on_axis(xs_mm, ys_mm, xt, g.tape_width_mm, tape_h, to_px)
+        _fill_exact(canvas, poly, YELLOW_BGR)
         points[name] = to_px(xt, float(np.interp(xt, xs_mm, ys_mm)))
+        flap = p.tape_flaps_mm.get(name, 0.0)
+        if flap > 0:  # gelöstes Bandende hängt unter dem Schaft herab
+            yb = float(np.interp(xt, xs_mm, ys_mm)) - tape_h / 2 + 1.0
+            fw, dx = 0.8 * g.tape_width_mm, flap * np.sin(np.radians(p.flap_angle_deg))
+            corners = [(xt - fw / 2, yb), (xt + fw / 2, yb),
+                       (xt + fw / 2 + dx, yb - flap), (xt - fw / 2 + dx, yb - flap)]  # fmt: skip
+            _fill(canvas, np.array([to_px(*c) for c in corners]), YELLOW_BGR)
 
     # Kugeln auf der Achse, 35 mm hinter der Sleeve-Stirn
     r_ball = g.ball_diameter_mm / 2.0 * s

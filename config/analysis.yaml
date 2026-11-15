@@ -14,6 +14,7 @@ geometry:
   ball_diameter_mm: 15     # gelbe Holzkugel auf der Kappe BC-001
   ball_offset_mm: 35       # Kugelmitte hinter der Sleeve-Stirnfläche (Kugelabstand = L + 70)
   tape_width_mm: 14        # gelbe Bänder (Mitte, Ringmarkierungen)
+  tape_thickness_mm: 0.15  # Isolierband (ANNAHME); Achse = Band-Oberkante - (d/2 + Stärke)
 
 # --- Detektion (Plan Abschnitt 4) ---
 detection:

@@ -59,19 +59,27 @@ def add_deflection(tracking: pd.DataFrame, bars: BarCatalog, cfg: AnalysisConfig
     )
     df = df.merge(scale.drop(columns=["ring_px", "ball_px"]), on=key, how="left")
 
-    df["d1_mm"] = df["d1_px"] / df["px_per_mm"]
-    df["dring_mm"] = df["dring_px"] / df["px_per_mm"]
-    base = df[df["step"] == 0].set_index(key)[["d1_mm", "dring_mm"]]
-    base.columns = ["d1_base_mm", "dring_base_mm"]
+    # Primär: Bänder auf der Schaftachse; "_centroid": Schwerpunkt der Bandfläche (Sensitivität)
+    px_cols = {
+        "d1": "d1_px",
+        "dring": "dring_px",
+        "d1_centroid": "d1_px_centroid",
+        "dring_centroid": "dring_px_centroid",
+    }
+    quantities = list(px_cols)
+    for q, col in px_cols.items():
+        df[f"{q}_mm"] = df[col] / df["px_per_mm"] if col in df else np.nan
+    base = df[df["step"] == 0].set_index(key)[[f"{q}_mm" for q in quantities]]
+    base.columns = [f"{q}_base_mm" for q in quantities]
     df = df.join(base, on=key)
-    df["delta_d1_mm"] = df["d1_mm"] - df["d1_base_mm"]
-    df["delta_dring_mm"] = df["dring_mm"] - df["dring_base_mm"]
+    for q in quantities:
+        df[f"delta_{q}_mm"] = df[f"{q}_mm"] - df[f"{q}_base_mm"]
 
     flags = df.get("detect_flags", pd.Series("", index=df.index)).fillna("").astype(str)
     flags = _append_flag(flags, df["px_per_mm"].isna(), "no_scale")
     flags = _append_flag(flags, df["d1_base_mm"].isna(), "no_baseline")
     df["deflection_flags"] = flags
-    return df.drop(columns=["d1_base_mm", "dring_base_mm"])
+    return df.drop(columns=list(base.columns))
 
 
 def _ols(x: np.ndarray, y: np.ndarray, degree: int):
@@ -118,6 +126,10 @@ def cycle_summary(df: pd.DataFrame, cfg: AnalysisConfig) -> pd.DataFrame:
             else np.nan
         )
         r["n_hysteresis_pairs"] = len(pairs)
+        upc = up.dropna(subset=["delta_d1_centroid_mm"])
+        if len(upc) >= 3:
+            b1c, _ = np.polyfit(upc["added_mass_kg"], upc["delta_d1_centroid_mm"], 1)
+            r["compliance_centroid_mm_per_100kg"] = 100 * b1c
         rows.append(r)
     return pd.DataFrame(rows)
 
@@ -132,7 +144,9 @@ def bar_summary(cycles: pd.DataFrame, bars: BarCatalog) -> pd.DataFrame:
         "hysteresis_mm",
         "nonlin_at_peak_mm",
         "implied_length_mm",
+        "compliance_centroid_mm_per_100kg",
     ]
+    cols = [c for c in cols if c in cycles]
     g = cycles.groupby("bar_id", sort=False)[cols]
     out = g.mean().add_suffix("_mean").join(g.std().add_suffix("_sd")).join(g.count().iloc[:, :1])
     out = out.rename(columns={f"{cols[0]}": "n_cycles"}).reset_index()
