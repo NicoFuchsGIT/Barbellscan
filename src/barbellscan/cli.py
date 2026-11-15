@@ -142,12 +142,22 @@ def deflect(
     bars_out: Path = Path("data/derived/bar_summary.csv"),
     bars: Path = BARS,
     analysis: Path = ANALYSIS,
+    exclusions: Annotated[
+        Path, typer.Option(help="Ausschlussliste (image, reason); fehlt die Datei, gilt keine")
+    ] = Path("data/exclusions.csv"),
+    drop_qc_flag: Annotated[
+        list[str] | None,
+        typer.Option(help="Sensitivitätsanalyse: Bilder mit diesem QC-Flag weglassen (mehrfach)"),
+    ] = None,
 ) -> None:
     """Skala (Ringbänder), D1/ΔD1, D_ring/ΔD_ring und Kenngrößen je Zyklus und Stange."""
     from .deflection import add_deflection, bar_summary, cycle_summary
 
     catalog, cfg = load_bars(bars), load_analysis(analysis)
-    df = add_deflection(pd.read_csv(tracking, dtype={"cycle": str}), catalog, cfg)
+    excl = pd.read_csv(exclusions) if exclusions.exists() else None
+    df = add_deflection(
+        pd.read_csv(tracking, dtype={"cycle": str}), catalog, cfg, excl, drop_qc_flag or ()
+    )
     cyc = cycle_summary(df, cfg)
     per_bar = bar_summary(cyc, catalog)
     for path, frame in ((out, df), (cycles_out, cyc), (bars_out, per_bar)):
@@ -155,7 +165,35 @@ def deflect(
         frame.to_csv(path, index=False)
     n_valid = int(df["delta_d1_mm"].notna().sum())
     typer.echo(f"ΔD1 für {n_valid}/{len(df)} Bilder -> {out}")
+    n_excl = int((df["exclusion_reason"] != "").sum())
+    if n_excl:
+        typer.echo(f"Ausgeschlossen: {n_excl} Bilder (Spalte exclusion_reason)")
     typer.echo(f"Zyklen -> {cycles_out}, Stangen -> {bars_out}")
+
+
+@app.command()
+def stats(
+    cycles: Path = Path("data/derived/cycle_summary.csv"),
+    out_dir: Path = Path("data/derived/stats"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+) -> None:
+    """Statistik nach Analyseplan Abschnitt 6 (H1, Deskriptiv, H2, Reliabilität)."""
+    from .stats import run_all
+
+    tables = run_all(
+        pd.read_csv(cycles, dtype={"cycle": str}), load_bars(bars), load_analysis(analysis)
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, frame in tables.items():
+        frame.to_csv(out_dir / f"{name}.csv", index=False)
+    h1 = tables["h1"].iloc[0]
+    typer.echo(
+        f"H1 (Deadlift nachgiebiger als Power): Differenz {h1['mean_diff']:.2f} mm/100 kg, "
+        f"Hedges g {h1['hedges_g']:.2f}, exakter p-Wert {h1['p_exact']:.4f} "
+        f"({int(h1['n_permutations'])} Zuordnungen)"
+    )
+    typer.echo(f"Tabellen ({', '.join(tables)}) -> {out_dir}")
 
 
 @app.command()

@@ -4,9 +4,15 @@
 - ``ΔD1``: D1 minus D1 bei Stufe 0 desselben Zyklus.
 - ``D_ring`` / ``ΔD_ring``: wie oben, aber mit der Sehne durch die beiden Ringbänder.
 - Skala je Zyklus: Ringabstand in px (Mittel aus Stufe 0 und letzter Stufe) / Ringabstand in mm.
+- Lastmoment je Stufe (Nachtrag N3) für die Linearitätsprüfung.
+- Ausschlüsse: Bilder mit dokumentiertem Detektionsfehler (``data/exclusions.csv``) und, für
+  Sensitivitätsanalysen, Bilder mit bestimmten QC-Flags werden als fehlender Wert behandelt.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import PurePosixPath, PureWindowsPath
 
 import numpy as np
 import pandas as pd
@@ -40,10 +46,74 @@ def _append_flag(flags: pd.Series, mask: pd.Series, flag: str) -> pd.Series:
     )
 
 
-def add_deflection(tracking: pd.DataFrame, bars: BarCatalog, cfg: AnalysisConfig) -> pd.DataFrame:
-    """Ergänzt Skala (je Zyklus), D1, ΔD1, D_ring, ΔD_ring in mm und die Kugel-Gegenprobe."""
+PX_COLUMNS = [
+    "ball_dist_px",
+    "ring_dist_px",
+    "d1_px",
+    "dring_px",
+    "d1_px_centroid",
+    "dring_px_centroid",
+]
+
+
+def _basename(path: str) -> str:
+    return PurePosixPath(PureWindowsPath(str(path)).as_posix()).name.lower()
+
+
+def apply_exclusions(
+    tracking: pd.DataFrame,
+    exclusions: pd.DataFrame | None = None,
+    drop_qc_flags: Sequence[str] = (),
+) -> pd.DataFrame:
+    """Setzt die Messwerte ausgeschlossener Bilder auf NaN (Plan Abschnitt 7).
+
+    ``exclusions``: Spalten ``image`` (Dateiname) und ``reason``; jeder Eintrag muss zu genau
+    einem Bild gehören und einen Grund haben. ``drop_qc_flags``: QC-Flags aus dem Manifest
+    (z. B. ``blur``), deren Bilder für eine Sensitivitätsanalyse entfallen.
+    """
     df = tracking.copy()
+    reason = pd.Series("", index=df.index)
+    if exclusions is not None and len(exclusions):
+        names = df["image_path"].map(_basename)
+        missing = {"image", "reason"} - set(exclusions.columns)
+        if missing:
+            raise ValueError(f"Ausschlussliste: Spalten fehlen: {sorted(missing)}")
+        for r in exclusions.itertuples():
+            why = "" if pd.isna(r.reason) else str(r.reason).strip()
+            if not why:
+                raise ValueError(f"Ausschlussliste: {r.image} ohne Begründung")
+            hit = names == _basename(r.image)
+            if hit.sum() != 1:
+                raise ValueError(f"Ausschlussliste: {r.image} passt auf {int(hit.sum())} Bilder")
+            reason[hit] = why
+    if drop_qc_flags and "qc_flags" in df:
+        qc = df["qc_flags"].fillna("").astype(str).str.split(";")
+        for flag in drop_qc_flags:
+            hit = qc.map(lambda fl, flag=flag: flag in fl) & (reason == "")
+            reason[hit] = f"qc_flag:{flag}"
+    excluded = reason != ""
+    for col in PX_COLUMNS:
+        if col in df:
+            df.loc[excluded, col] = np.nan
+    df["exclusion_reason"] = reason
+    return df
+
+
+def add_deflection(
+    tracking: pd.DataFrame,
+    bars: BarCatalog,
+    cfg: AnalysisConfig,
+    exclusions: pd.DataFrame | None = None,
+    drop_qc_flags: Sequence[str] = (),
+) -> pd.DataFrame:
+    """Ergänzt Skala (je Zyklus), D1, ΔD1, D_ring, ΔD_ring in mm und die Kugel-Gegenprobe."""
+    df = apply_exclusions(tracking, exclusions, drop_qc_flags)
     df["cycle"] = df["cycle"].astype(str)
+    if "plates_per_side" in df:
+        df["load_moment_kgm"] = [
+            cfg.load_moment_kgm(int(n), bars.bar(b))
+            for n, b in zip(df["plates_per_side"], df["bar_id"], strict=True)
+        ]
     key = ["bar_id", "cycle"]
     baseline_steps = [0, cfg.final_step]
     ref = df[df["step"].isin(baseline_steps)]
@@ -76,6 +146,7 @@ def add_deflection(tracking: pd.DataFrame, bars: BarCatalog, cfg: AnalysisConfig
         df[f"delta_{q}_mm"] = df[f"{q}_mm"] - df[f"{q}_base_mm"]
 
     flags = df.get("detect_flags", pd.Series("", index=df.index)).fillna("").astype(str)
+    flags = _append_flag(flags, df["exclusion_reason"] != "", "excluded")
     flags = _append_flag(flags, df["px_per_mm"].isna(), "no_scale")
     flags = _append_flag(flags, df["d1_base_mm"].isna(), "no_baseline")
     df["deflection_flags"] = flags
@@ -89,6 +160,17 @@ def _ols(x: np.ndarray, y: np.ndarray, degree: int):
     dof = len(x) - (degree + 1)
     sd = float(np.sqrt((resid**2).sum() / dof)) if dof > 0 else np.nan
     return coef, sd
+
+
+def _nonlinearity_at_max(x: np.ndarray, y: np.ndarray) -> float:
+    """Quadratischer minus linearer Fit am größten x (NaN bei weniger als 4 Punkten)."""
+    ok = ~(np.isnan(x) | np.isnan(y))
+    x, y = x[ok], y[ok]
+    if len(x) < 4:
+        return np.nan
+    lin, _ = _ols(x, y, 1)
+    quad, _ = _ols(x, y, 2)
+    return float(np.polyval(quad, x.max()) - np.polyval(lin, x.max()))
 
 
 def cycle_summary(df: pd.DataFrame, cfg: AnalysisConfig) -> pd.DataFrame:
@@ -110,10 +192,19 @@ def cycle_summary(df: pd.DataFrame, cfg: AnalysisConfig) -> pd.DataFrame:
             r["stiffness_kg_per_mm"] = 1 / b1 if b1 else np.nan
             r["r2"] = 1 - (resid_sd**2 * (len(x) - 2)) / (((y - y.mean()) ** 2).sum() or np.nan)
             r["resid_sd_mm"] = resid_sd
-        if len(up) >= 4:
-            q, _ = _ols(x, y, 2)
-            m = x.max()
-            r["nonlin_at_peak_mm"] = float(np.polyval(q, m) - (b1 * m + b0))
+        # Linearität. Gegen die Masse ist auch eine ideal elastische Stange gekrümmt, weil
+        # jede weitere Scheibe weiter außen sitzt; Kriterium ist deshalb ΔD_ring gegen das
+        # Lastmoment (Nachtrag N3). Die übrigen Werte sind deskriptiv.
+        r["nonlin_at_peak_mm"] = _nonlinearity_at_max(x, y)
+        if "load_moment_kgm" in g:
+            up_all = g[g["phase"] == "up"]
+            mom = up_all["load_moment_kgm"].to_numpy(float)
+            r["nonlin_ring_moment_mm"] = _nonlinearity_at_max(
+                mom, up_all["delta_dring_mm"].to_numpy(float)
+            )
+            r["nonlin_d1_moment_mm"] = _nonlinearity_at_max(
+                mom, up_all["delta_d1_mm"].to_numpy(float)
+            )
         at = g.set_index("step")["delta_d1_mm"]
         r["delta_d1_peak_mm"] = at.get(peak, np.nan)
         r["residual_mm"] = at.get(final, np.nan)
@@ -143,6 +234,9 @@ def bar_summary(cycles: pd.DataFrame, bars: BarCatalog) -> pd.DataFrame:
         "residual_mm",
         "hysteresis_mm",
         "nonlin_at_peak_mm",
+        "nonlin_ring_moment_mm",
+        "nonlin_d1_moment_mm",
+        "resid_sd_mm",
         "implied_length_mm",
         "compliance_centroid_mm_per_100kg",
     ]

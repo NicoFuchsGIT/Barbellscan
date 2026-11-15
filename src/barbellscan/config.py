@@ -71,6 +71,8 @@ class Geometry(BaseModel):
     ball_offset_mm: float = Field(default=35.0, ge=0)
     tape_width_mm: float = Field(default=14.0, gt=0)
     tape_thickness_mm: float = Field(default=0.15, ge=0)
+    plate_thickness_mm: float = Field(default=27.0, gt=0)
+    collar_centre_mm: float = Field(default=15.0, ge=0)
 
     @property
     def support_offset_loaded_mm(self) -> float:
@@ -117,6 +119,22 @@ class AnalysisConfig(BaseModel):
         if plates_per_side == 0:
             return 0.0
         return 2.0 * (plates_per_side * self.plate_mass_kg + self.collar_mass_kg)
+
+    def load_moment_kgm(self, plates_per_side: int, bar: Bar) -> float:
+        """Lastmoment beider Seiten um die Auflager in kg·m (Plan, Nachtrag N3).
+
+        Scheibe k (k = 1 … n) sitzt mit ihrem Schwerpunkt bei Sleeve-Anschlag + (k − ½)·Dicke,
+        die Klemme außen daran. Das Biegemoment im Schaft zwischen den Auflagern ist nach der
+        Statik genau dieses Moment (mal g), unabhängig von der Lagerung der Sleeves.
+        """
+        if plates_per_side == 0:
+            return 0.0
+        g = self.geometry
+        stop, a, t = bar.shaft_length_mm / 2.0, g.support_offset_loaded_mm, g.plate_thickness_mm
+        arms = [stop + (k + 0.5) * t - a for k in range(plates_per_side)]
+        collar_arm = stop + plates_per_side * t + g.collar_centre_mm - a
+        one_side = self.plate_mass_kg * sum(arms) + self.collar_mass_kg * collar_arm
+        return 2.0 * one_side / 1000.0
 
     def schedule(self) -> list[Step]:
         """Stufen eines Zyklus: 0 -> max (up), danach zurück auf 0 (down)."""

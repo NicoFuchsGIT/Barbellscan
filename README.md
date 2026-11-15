@@ -19,6 +19,7 @@ Die 663 JPEGs liegen nicht im Git. Entweder nach `data/raw/` kopieren oder mit `
 uv run barbellscan check-manifest --verify --image-root "C:\Users\nico2\Desktop\Bilder\umbenannt"
 uv run barbellscan track --image-root "C:\Users\nico2\Desktop\Bilder\umbenannt" --overlay-dir outputs/overlays
 uv run barbellscan deflect
+uv run barbellscan stats
 ```
 
 | Befehl | Ergebnis |
@@ -26,7 +27,13 @@ uv run barbellscan deflect
 | `check-manifest --verify` | Vollständigkeit (13 × 3 × 17) und SHA-256 jeder Bilddatei |
 | `track` | `data/derived/tracking.csv`: Markerpositionen (px; Bänder als Punkt auf der Schaftachse, robust gegen herabhängende Bandenden), Kugel-/Ringabstand, `d1_px`, `dring_px`, Detektions-Flags (u. a. `tape_hanging_*`, `missing_*`); mit `--overlay-dir` ein QC-Bild je Foto |
 | `deflect` | `data/derived/deflection.csv` (Skala je Zyklus, D1, ΔD1, ΔD_ring in mm), `cycle_summary.csv` (Nachgiebigkeit, ΔD1 bei 405 kg, Restverformung, Hysterese je Zyklus), `bar_summary.csv` (je Stange) |
+| `stats` | `data/derived/stats/`: `h1.csv` (exakter Permutationstest Deadlift vs. Power), `bars.csv` (Kenngrößen je Stange mit 95-%-KI), `categories.csv`, `pairs.csv` (Welch-Differenzen innerhalb eines Typs), `reliability.csv` (ICC(1,1), SEM, MDC95), `h2.csv` (Linearität, Restverformung, Hysterese gegen MDC95) |
 | `overlay <bild> --bar <bar_id>` | QC-Bild für ein einzelnes Foto (zum Justieren von ROI/Schwellen in `config/analysis.yaml`) |
+
+Bilder mit dokumentiertem Detektionsfehler (im Overlay nachvollziehbar) kommen mit Begründung in `data/exclusions.csv` (`image,reason`); `deflect` behandelt sie als fehlenden Wert. Sensitivitätsanalyse ohne unscharfe Bilder:
+```
+uv run barbellscan deflect --drop-qc-flag blur --out data/derived/sens_noblur/deflection.csv --cycles-out data/derived/sens_noblur/cycle_summary.csv --bars-out data/derived/sens_noblur/bar_summary.csv
+```
 
 Pilot zuerst mit einem Foto pro Stange, z. B.:
 ```
