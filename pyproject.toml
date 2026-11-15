@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml",
     "pyarrow",
     "typer",
+    "scipy-stubs~=1.18.1",
 ]
 
 [dependency-groups]
