@@ -1,0 +1,2 @@
+mean_diff,p_exact,n_permutations,n_deadlift,n_power,mean_deadlift,mean_power,hedges_g,alpha,significant
+10.992947905583573,0.006060606060606061,165,3,8,25.408733305991188,14.415785400407614,8.866788228862813,0.05,True

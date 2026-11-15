@@ -23,7 +23,8 @@ Stand: 15.11.2026 (CW 46). Maßgeblich für Inhalt und Methode ist der [Analysep
 | Ausschlussliste und Sensitivitätsläufe (`data/exclusions.csv`, `--drop-qc-flag`) | ✅ |
 | Statistik nach Plan 6: H1, Deskriptiv, H2, ICC/SEM/MDC95 (`stats`) | ✅ gegen Referenzwerte getestet |
 | Pilotlauf der Detektion auf den echten Fotos | ✅ 663/663 ausgewertet, 1 Kugel fehlt (bekannt); Bandmessung danach umgestellt (N5) |
-| **Neuer `track`-Lauf mit N5, Overlay-Sichtung, `deflect`, `stats`** | ❌ nächster Schritt |
+| `track` mit N5, `deflect`, `stats` auf den echten Fotos | ✅ 662/663 Bilder mit ΔD1, Ergebnisse in `data/derived/` |
+| **Sichtung aller Overlays, Nachmessen von Kugelversatz, Bandabstand und Scheibendicke** | ❌ nächster Schritt |
 | Plumb-Line-Prüfung der Restverzeichnung (Plan 4.4) | ❌ |
 | Unsicherheitsbudget mit Monte-Carlo (Plan 6.4) | ❌ |
 | Balkenmodell als Gegenprobe (V4) | ❌ (Rechenkern liegt als Testhilfe in `tests/test_stats.py`) |
