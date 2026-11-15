@@ -10,11 +10,13 @@ zwei Bänder auf den Ringmarkierungen. Zuordnung über die Geometrie, nicht übe
    (Kugelabstand L + 70 mm) am nächsten liegt, innerhalb eines Suchfensters unterhalb der
    Ringlinie (Enden hängen herab).
 
-Bänder (Mitte, Ringe) liefern die **Schaftachse**, nicht den Schwerpunkt der gelben Fläche
-(ANALYSIS_PLAN Nachtrag N2): Oberkante des Bandes (Subpixel, je Spalte) -> lokale Neigung und
-Schnittpunkt mit der Bandmittellinie, dann um den Schaftradius senkrecht nach unten. Ein
-gelöstes, herabhängendes Bandende verändert die Oberkante nicht. Der Schwerpunkt wird zur
-Sensitivitätsanalyse weiter ausgegeben (``Blob.centroid_xy``).
+Messpunkt der Bänder (Mitte, Ringe) ist der **Schwerpunkt der gelben Fläche in der Schaftzone**
+(ANALYSIS_PLAN Nachtrag N5): von der Bandoberkante bis Oberkante + Banddurchmesser. Ohne
+herabhängendes Bandende ist das der gewöhnliche Schwerpunkt; ein gelöster Lappen liegt
+unterhalb der Zone und zählt nicht mit. Zur Sensitivitätsanalyse werden weiter ausgegeben:
+der Schwerpunkt der ganzen Fläche (``Blob.centroid_xy``) und die Schaftachse aus der
+Oberkante nach Nachtrag N2 (``Blob.axis_xy``; auf den echten Fotos wegen der Glanzlichter auf
+den Bändern deutlich unruhiger).
 
 Fehlt ein Marker, bleibt er leer und wird geflaggt; es wird nie ein Fehler ausgelöst.
 """
@@ -30,16 +32,18 @@ from .config import Detection
 
 MARKERS = ("left", "ring_left", "centre", "ring_right", "right")
 TAPES = ("ring_left", "centre", "ring_right")
-HANGING_FACTOR = 1.3  # Bandhöhe > 1,3 x Schaftdurchmesser => Bandende hängt herab
+CLIP_MARGIN = 0.05  # Schaftzone = Oberkante bis Oberkante + (1 + CLIP_MARGIN) x Banddurchmesser
+HANGING_FRACTION = 0.05  # Gelbanteil unterhalb der Schaftzone, ab dem das Band als hängend gilt
 
 
 @dataclass
 class Blob:
-    xy: tuple[float, float]  # Messpunkt: Kugelmitte bzw. Schaftachse unter dem Band
+    xy: tuple[float, float]  # Messpunkt: Kugelmitte bzw. Band-Schwerpunkt in der Schaftzone
     mass: float
     area: int
     bbox: tuple[int, int, int, int] = (0, 0, 0, 0)  # x0, y0, x1, y1 (Vollbild, exklusiv)
-    centroid_xy: tuple[float, float] | None = None  # Schwerpunkt der gelben Fläche
+    centroid_xy: tuple[float, float] | None = None  # Schwerpunkt der ganzen gelben Fläche
+    axis_xy: tuple[float, float] | None = None  # Schaftachse aus der Oberkante (N2)
 
 
 @dataclass
@@ -224,6 +228,40 @@ def measure_tape(
     )
 
 
+def clipped_centroid(
+    image: np.ndarray, blob: Blob, diameter_px: float
+) -> tuple[tuple[float, float], float] | None:
+    """Schwerpunkt der gelben Fläche in der Schaftzone und Gelbanteil darunter (Nachtrag N5).
+
+    Oberkante: je Spalte die erste Zeile mit mindestens einem Viertel des Spaltenmaximums,
+    davon das 20. Perzentil (Spalten, die nur einen Lappen enthalten, beginnen tiefer). Die
+    Zone endet weich (linear über ein Pixel) bei Oberkante + (1 + CLIP_MARGIN) x Durchmesser.
+    Die Oberkante muss nur grob stimmen: Sie legt allein die untere Grenze fest und wirkt
+    sich auf den Schwerpunkt nur aus, wenn dort tatsächlich ein Lappen hängt.
+    """
+    pad = max(3, int(round(0.1 * diameter_px)))
+    h, w_img = image.shape[:2]
+    x0, y0, x1, y1 = blob.bbox
+    x0, y0 = max(x0 - pad, 0), max(y0 - pad, 0)
+    x1, y1 = min(x1 + pad, w_img), min(y1 + pad, h)
+    w = np.maximum(yellow_weight(image[y0:y1, x0:x1]), 0.0).astype(np.float64)
+    total = w.sum()
+    if total <= 0:
+        return None
+    colmax = w.max(axis=0)
+    cols = np.flatnonzero(colmax >= 0.6 * colmax.max())
+    tops = [int(np.argmax(w[:, j] >= 0.25 * colmax[j])) for j in cols]
+    limit = float(np.percentile(tops, 20)) + (1 + CLIP_MARGIN) * diameter_px
+    rows = np.arange(w.shape[0], dtype=np.float64)[:, None]
+    zone = w * np.clip(limit - rows + 0.5, 0.0, 1.0)
+    m = zone.sum()
+    if m <= 0:
+        return None
+    cx = float((zone.sum(axis=0) * np.arange(w.shape[1])).sum() / m)
+    cy = float((zone.sum(axis=1) * rows[:, 0]).sum() / m)
+    return (cx + x0, cy + y0), float(1 - m / total)
+
+
 def _refine_tapes(
     image: np.ndarray,
     out: Markers,
@@ -232,31 +270,28 @@ def _refine_tapes(
     scale0: float,
     ring_spacing_mm: float,
 ) -> None:
-    """Ersetzt die Band-Schwerpunkte durch Punkte auf der Schaftachse (Plan, Nachtrag N2).
+    """Setzt die Messpunkte der Bänder: Schwerpunkt in der Schaftzone (Plan, Nachtrag N5).
 
-    Der Radius in px kommt aus dem Ringabstand im selben Bild (eine Iteration ab ``scale0``).
+    Der Durchmesser in px kommt aus dem Ringabstand im selben Bild (Schwerpunkte), sonst aus
+    ``scale0``. Die Schaftachse nach N2 wird als ``axis_xy`` für die Sensitivität mitgeführt.
     """
-    fits = {}
+    scale = scale0
+    left, right = out.points["ring_left"], out.points["ring_right"]
+    if left is not None and right is not None:
+        scale = float(np.hypot(*np.subtract(right.xy, left.xy))) / ring_spacing_mm
     for name in TAPES:
         blob = out.points[name]
         if blob is None:
             continue
-        fit = measure_tape(image, blob, radius_mm * scale0, scale0)
-        if fit is None:
-            out.flags.append(f"tape_fit_failed_{name}")  # Schwerpunkt bleibt Messpunkt
-        else:
-            fits[name] = fit
-    scale = scale0
-    for _ in range(2):
-        pts = {name: fit.axis_point(radius_mm * scale) for name, fit in fits.items()}
-        if "ring_left" in pts and "ring_right" in pts:
-            scale = float(np.hypot(*np.subtract(pts["ring_right"], pts["ring_left"])))
-            scale /= ring_spacing_mm
-    for name, fit in fits.items():
-        blob = out.points[name]
-        out.points[name] = Blob(pts[name], blob.mass, blob.area, blob.bbox, blob.centroid_xy)
-        if fit.height_px > HANGING_FACTOR * band_mm * scale:
-            out.flags.append(f"tape_hanging_{name}")
+        xy = blob.xy
+        res = clipped_centroid(image, blob, band_mm * scale)
+        if res is not None:
+            xy, below = res
+            if below > HANGING_FRACTION:
+                out.flags.append(f"tape_hanging_{name}")
+        fit = measure_tape(image, blob, radius_mm * scale, scale)
+        axis = None if fit is None else fit.axis_point(radius_mm * scale)
+        out.points[name] = Blob(xy, blob.mass, blob.area, blob.bbox, blob.centroid_xy, axis)
 
 
 def _shaft_triple(blobs: list[Blob], ring_px: float, tol: float):

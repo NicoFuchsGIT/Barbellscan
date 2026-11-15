@@ -1,9 +1,10 @@
 """Pipeline pro Bild: Marker-Detektion -> Pixelgrößen; parallel über das Manifest.
 
 Ergebnis je Bild (alles in Pixeln, Vollbild-Koordinaten der Originaldatei):
-Markerpositionen, Kugel- und Ringabstand, ``d1_px`` (Mitte zur Kugel-Sehne) und ``dring_px``
-(Mitte zur Ringband-Sehne). Die Umrechnung in mm und der Bezug auf Stufe 0 erfolgen erst in
-:mod:`barbellscan.deflection`, weil die Skala je Zyklus aus den Baseline-Fotos kommt.
+Markerpositionen (Bänder: Schwerpunkt in der Schaftzone), Kugel- und Ringabstand, ``d1_px``
+(Mitte zur Kugel-Sehne) und ``dring_px`` (Mitte zur Ringband-Sehne). Die Umrechnung in mm und
+der Bezug auf Stufe 0 erfolgen erst in :mod:`barbellscan.deflection`, weil die Skala je Zyklus
+aus den Baseline-Fotos kommt.
 """
 
 from __future__ import annotations
@@ -26,10 +27,14 @@ RESULT_COLUMNS = [
     "ring_dist_px",
     "d1_px",
     "dring_px",
-    # Sensitivitätsanalyse: Bänder über den Schwerpunkt der gelben Fläche statt Schaftachse
+    # Sensitivitätsanalysen: Schwerpunkt der ganzen gelben Fläche (c) und Schaftachse aus der
+    # Bandoberkante nach Nachtrag N2 (a) statt Schwerpunkt in der Schaftzone
     *(f"{m}_{c}" for m in TAPES for c in ("cx", "cy")),
     "d1_px_centroid",
     "dring_px_centroid",
+    *(f"{m}_{c}" for m in TAPES for c in ("ax", "ay")),
+    "d1_px_axis",
+    "dring_px_axis",
     "detect_flags",
 ]
 
@@ -63,6 +68,8 @@ def track_image(image: np.ndarray, bar: Bar, cfg: AnalysisConfig, full_frame: bo
             row[f"{name}_x"], row[f"{name}_y"] = blob.xy
             if name in TAPES and blob.centroid_xy is not None:
                 row[f"{name}_cx"], row[f"{name}_cy"] = blob.centroid_xy
+            if name in TAPES and blob.axis_xy is not None:
+                row[f"{name}_ax"], row[f"{name}_ay"] = blob.axis_xy
     left, right, centre = _pt(row, "left"), _pt(row, "right"), _pt(row, "centre")
     rl, rr = _pt(row, "ring_left"), _pt(row, "ring_right")
     if _valid(left, right):
@@ -73,15 +80,14 @@ def track_image(image: np.ndarray, bar: Bar, cfg: AnalysisConfig, full_frame: bo
         row["d1_px"] = chord_offset_px(left, right, centre)
     if _valid(rl, rr, centre):
         row["dring_px"] = chord_offset_px(rl, rr, centre)
-    cc = (row["centre_cx"], row["centre_cy"])
-    rlc, rrc = (
-        (row["ring_left_cx"], row["ring_left_cy"]),
-        (row["ring_right_cx"], row["ring_right_cy"]),
-    )
-    if _valid(left, right, cc):
-        row["d1_px_centroid"] = chord_offset_px(left, right, cc)
-    if _valid(rlc, rrc, cc):
-        row["dring_px_centroid"] = chord_offset_px(rlc, rrc, cc)
+    for sfx, tag in (("c", "centroid"), ("a", "axis")):
+        alt = {m: (row[f"{m}_{sfx}x"], row[f"{m}_{sfx}y"]) for m in TAPES}
+        if _valid(left, right, alt["centre"]):
+            row[f"d1_px_{tag}"] = chord_offset_px(left, right, alt["centre"])
+        if _valid(*alt.values()):
+            row[f"dring_px_{tag}"] = chord_offset_px(
+                alt["ring_left"], alt["ring_right"], alt["centre"]
+            )
     row["detect_flags"] = ";".join(found.flags)
     return row
 
