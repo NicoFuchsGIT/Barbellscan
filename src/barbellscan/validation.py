@@ -1,26 +1,35 @@
-"""Vergleich Tracking gegen synthetische Ground Truth (V1)."""
+"""Vergleich der Auswertung gegen synthetische Ground Truth (V1)."""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+from .manifest import KEY
 
-def compare_to_truth(tracking: pd.DataFrame, truth: pd.DataFrame) -> dict:
-    """Bias, Streuung, RMSE und 95-%-Limits of Agreement von D1 (mm) gegen ``d1_true_mm``."""
-    key = ["bar_id", "run", "load_kg", "is_baseline"]
-    df = tracking.merge(truth[key + ["d1_true_mm"]], on=key, how="inner")
-    valid = df.dropna(subset=["d1_mm"])
-    err = valid["d1_mm"] - valid["d1_true_mm"]
+
+def _stats(err: pd.Series, prefix: str) -> dict:
     sd = float(err.std(ddof=1)) if len(err) > 1 else float("nan")
     return {
+        f"{prefix}_bias_mm": float(err.mean()),
+        f"{prefix}_sd_mm": sd,
+        f"{prefix}_rmse_mm": float(np.sqrt((err**2).mean())),
+        f"{prefix}_loa_low_mm": float(err.mean() - 1.96 * sd),
+        f"{prefix}_loa_high_mm": float(err.mean() + 1.96 * sd),
+        f"{prefix}_max_abs_mm": float(err.abs().max()),
+    }
+
+
+def compare_to_truth(deflection: pd.DataFrame, truth: pd.DataFrame) -> dict:
+    """Bias, Streuung, RMSE und 95-%-LoA von ΔD1 und D1 (mm) gegen die Ground Truth."""
+    t = truth.astype({"cycle": str})[[*KEY, "d1_true_mm", "delta_d1_true_mm"]]
+    df = deflection.astype({"cycle": str}).merge(t, on=KEY, how="inner")
+    valid = df.dropna(subset=["delta_d1_mm"])
+    out = {
         "n_images": int(len(df)),
         "n_valid": int(len(valid)),
         "detection_rate": float(len(valid) / len(df)) if len(df) else float("nan"),
-        "bias_mm": float(err.mean()),
-        "sd_mm": sd,
-        "rmse_mm": float(np.sqrt((err**2).mean())),
-        "loa_low_mm": float(err.mean() - 1.96 * sd),
-        "loa_high_mm": float(err.mean() + 1.96 * sd),
-        "max_abs_error_mm": float(err.abs().max()),
     }
+    out |= _stats(valid["delta_d1_mm"] - valid["delta_d1_true_mm"], "delta_d1")
+    out |= _stats(valid["d1_mm"] - valid["d1_true_mm"], "d1")
+    return out

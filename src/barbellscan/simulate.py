@@ -1,33 +1,33 @@
-"""Synthetische Seitenansicht-Bilder mit exakt bekannter Durchbiegung (FR-15, Validierung V1).
+"""Synthetische Frontansicht-Bilder mit exakt bekannter Durchbiegung (FR-15, Validierung V1).
 
 Weltkoordinaten in mm: x entlang der Stange (Ursprung = Mitte), y nach oben, y = 0 auf der
-Auflagelinie der J-Hooks. Zwischen den Auflagern wölbt sich der Schaft nach oben, die Enden
-hängen herab; die Sleeves (starr) bleiben gerade. Zielgröße ist D1 (PRD 5.3): Abstand der
-Mitte zur Sehne der beiden Endmarker.
+Auflagelinie. Zwischen den Auflagern wölbt sich der Schaft nach oben, die Enden hängen herab;
+die Sleeves (starr) bleiben gerade. Marker wie beim echten Shooting (ANALYSIS_PLAN Abschnitt 3):
+gelbe Kugeln 35 mm hinter den Sleeve-Stirnflächen, gelbe Bänder an Mitte und Ringmarkierungen,
+gelbe Monolift-Knöpfe als Störobjekte oberhalb der Stange.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
 import numpy as np
 import pandas as pd
+import yaml
 from joblib import Parallel, delayed
 
-from .config import AnalysisConfig, BarCatalog, BarModel
+from .config import AnalysisConfig, Bar, BarCatalog, Geometry
 
-ARUCO_DICT = cv2.aruco.DICT_4X4_50
-ARUCO_ID = 0  # einzelner Referenzmarker im Hintergrund (Skala, später Verzerrung)
-MARKER_BORDER_MM = 10.0  # weiße Ruhezone um den Marker
-BALL_BGR = (0, 215, 255)  # gelbe Kugel an den Sleeve-Kappen (BGR)
-TAPE_WIDTH_MM = 40.0
-SLEEVE_DIAMETER_MM = 50.0
-TAPE_BGR = (255, 0, 255)
+YELLOW_BGR = (20, 210, 245)
+STEEL_BGR = (150, 148, 145)
 PLATE_BGR = (35, 35, 190)  # rote 25-kg-Scheibe
 PLATE_EDGE_BGR = (15, 15, 90)
-COLLAR_BGR = (45, 45, 45)
+COLLAR_BGR = (60, 60, 60)
+CAP_BGR = (25, 25, 25)
+SLEEVE_DIAMETER_MM = 50.0
+KNOB_X_MM, KNOB_Y_MM, KNOB_D_MM = 350.0, 230.0, 40.0  # wie im Shooting ca. 700 mm Abstand
 
 
 @dataclass
@@ -37,92 +37,55 @@ class SimParams:
     blur_sigma_px: float = 0.8
     noise_sigma: float = 2.0
     roll_deg: float = 0.0
+    shift_px: tuple[float, float] = (0.0, 0.0)  # Kameraversatz
     brightness: float = 1.0
-    height_mm: float = 600.0
+    background: int = 45  # dunkle Holzwand
+    height_mm: float = 640.0
     margin_mm: float = 60.0
-    origin_frac: float = 0.5  # Lage der Auflagelinie von oben
-    aruco_size_mm: float = 100.0  # Kantenlänge des Hintergrundmarkers
-    aruco_offset_mm: float = 140.0  # Höhe des Markermittelpunkts über der Auflagelinie
-    aruco_scale_ratio: float = 1.0  # Abbildungsmaßstab der Markerebene relativ zur Stangenebene
-    ball_diameter_mm: float = 50.0
-    ball_hang_mm: float = 0.0  # Kugelmittelpunkt hängt so weit unter dem Sleeve-Ende
-    plates_per_side: int = 0  # 25-kg-Scheiben je Seite (0 = leere Stange)
-    plate_thickness_mm: float = 28.0  # ANNAHME, am echten Satz nachmessen
+    origin_frac: float = 0.45  # Lage der Auflagelinie von oben
+    plates_per_side: int = 0
+    plate_thickness_mm: float = 27.0
     plate_diameter_mm: float = 450.0
-    collar_width_mm: float = 30.0  # ANNAHME
-    collar_height_mm: float = 90.0  # ANNAHME
+    collar_width_mm: float = 30.0
+    collar_height_mm: float = 90.0
+    distractors: bool = True  # gelbe Monolift-Knöpfe
+    tape_flaps_mm: dict[str, float] = field(default_factory=dict)  # gelöstes Bandende je Marker
+    flap_angle_deg: float = 8.0
 
 
 @dataclass
 class SimResult:
     image: np.ndarray
     d1_mm: float
+    dring_mm: float
     scale_px_per_mm: float
     points_px: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 def bend_profile(
-    x_mm: np.ndarray, bar: BarModel, support_offset_mm: float, d1_mm: float
+    x_mm: np.ndarray, bar: Bar, support_offset_mm: float, d1_mm: float, end_x_mm: float
 ) -> np.ndarray:
-    """Höhe y(x) der Stangenachse bei gegebenem D1.
+    """Höhe y(x) der Stangenachse, normiert auf D1 = y(0) - y(end_x).
 
     Krümmung konstant zwischen den Auflagern, danach linear auf 0 am Schaftende abfallend,
-    Sleeves starr (gerade, Steigung wie am Schaftende).
+    Sleeves und Kappen starr (gerade). ``end_x_mm`` ist die x-Lage der Endmarker.
     """
     a = support_offset_mm
     xs = bar.shaft_length_mm / 2.0
-    half = bar.total_length_mm / 2.0
-    dx = 0.5
-    grid = np.arange(0.0, half + dx, dx)
+    dx = 0.25
+    grid = np.arange(0.0, max(end_x_mm, np.max(np.abs(x_mm))) + dx, dx)
     kappa = np.where(
         grid <= a, 1.0, np.where(grid <= xs, 1.0 - (grid - a) / max(xs - a, 1e-9), 0.0)
     )
     theta = np.concatenate([[0.0], np.cumsum((kappa[1:] + kappa[:-1]) / 2 * dx)])
-    y = np.concatenate([[0.0], np.cumsum((theta[1:] + theta[:-1]) / 2 * dx)])
-    y = -y  # Hogging: Mitte oben, Enden unten
+    y = -np.concatenate([[0.0], np.cumsum((theta[1:] + theta[:-1]) / 2 * dx)])  # Mitte oben
     y -= np.interp(a, grid, y)  # y(Auflager) = 0
-    unit_d1 = y[0] - y[-1]
-    y = y * (d1_mm / unit_d1)
-    return np.interp(np.abs(x_mm), grid, y)
+    unit = y[0] - np.interp(end_x_mm, grid, y)
+    scale = d1_mm / unit if unit else 0.0
+    return np.interp(np.abs(x_mm), grid, y * scale)
 
 
-def _blend_rect(canvas: np.ndarray, x0: float, x1: float, y0: float, y1: float, bgr) -> None:
-    """Achsenparalleles Rechteck mit exakter Flächenabdeckung je Pixel (Pixelmitten-Koordinaten).
-
-    ``cv2.fillPoly`` füllt das Innere ohne Antialiasing und rastet Kanten auf das Gitter ein.
-    """
-    ix0, ix1 = int(np.floor(x0 - 0.5)), int(np.ceil(x1 + 0.5))
-    iy0, iy1 = int(np.floor(y0 - 0.5)), int(np.ceil(y1 + 0.5))
-    xs = np.arange(ix0, ix1 + 1)
-    ys = np.arange(iy0, iy1 + 1)
-    cov_x = np.clip(np.minimum(xs + 0.5, x1) - np.maximum(xs - 0.5, x0), 0.0, 1.0)
-    cov_y = np.clip(np.minimum(ys + 0.5, y1) - np.maximum(ys - 0.5, y0), 0.0, 1.0)
-    alpha = (cov_y[:, None] * cov_x[None, :])[..., None]
-    roi = canvas[iy0 : iy1 + 1, ix0 : ix1 + 1].astype(np.float32)
-    canvas[iy0 : iy1 + 1, ix0 : ix1 + 1] = np.round(
-        roi * (1.0 - alpha) + np.array(bgr, np.float32) * alpha
-    ).astype(np.uint8)
-
-
-def _paste_marker(canvas: np.ndarray, patch: np.ndarray, cx: float, cy: float) -> None:
-    """Marker-Patch mit Subpixel-Versatz (bilinear) um (cx, cy) in die Leinwand setzen.
-
-    Koordinaten im Pixelmitten-Format (Pixel j liegt bei Koordinate j).
-    """
-    p = patch.shape[0]
-    tlx, tly = cx - (p - 1) / 2.0, cy - (p - 1) / 2.0
-    ix, iy = int(np.floor(tlx)), int(np.floor(tly))
-    fx, fy = tlx - ix, tly - iy
-    roi = np.full((p + 2, p + 2, 3), 255, np.uint8)
-    roi[1:-1, 1:-1] = patch
-    m = np.float32([[1, 0, fx], [0, 1, fy]])
-    roi = cv2.warpAffine(
-        roi, m, (p + 2, p + 2), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-    )
-    canvas[iy - 1 : iy + p + 1, ix - 1 : ix + p + 1] = roi
-
-
-def _stack_polygon(xs_mm, ys_mm, x_c, width_mm, height_mm, to_px, s) -> np.ndarray:
+def _rect_on_axis(xs_mm, ys_mm, x_c, width_mm, height_mm, to_px) -> np.ndarray:
     """Rechteck (Breite entlang der Achse, Höhe senkrecht dazu) um den Achspunkt bei x_c."""
     y_c = float(np.interp(x_c, xs_mm, ys_mm))
     slope = float(np.interp(x_c, xs_mm, np.gradient(ys_mm, xs_mm)))
@@ -136,120 +99,150 @@ def _stack_polygon(xs_mm, ys_mm, x_c, width_mm, height_mm, to_px, s) -> np.ndarr
     return np.array([to_px(*q) for q in corners])
 
 
-def _fill(canvas, poly, fill, edge, edge_px) -> None:
-    sub = np.round(poly * 16).astype(np.int32)
+def _fill(canvas, poly, fill, edge=None, edge_px=1) -> None:
+    sub = np.round(np.asarray(poly) * 16).astype(np.int32)
     cv2.fillPoly(canvas, [sub], fill, lineType=cv2.LINE_AA, shift=4)
-    cv2.polylines(
-        canvas, [sub], True, edge, thickness=max(int(edge_px), 1), lineType=cv2.LINE_AA, shift=4
-    )
+    if edge is not None:
+        cv2.polylines(canvas, [sub], True, edge, max(int(edge_px), 1), cv2.LINE_AA, shift=4)
 
 
-def _draw_plates(canvas, bar, xs_mm, ys_mm, p: SimParams, to_px, s) -> None:
-    x0 = bar.shaft_length_mm / 2.0 + 5.0  # Anschlag am inneren Sleeve-Ende
-    t = p.plate_thickness_mm
-    for sign in (-1.0, 1.0):
-        for k in range(p.plates_per_side):
-            xc = sign * (x0 + (k + 0.5) * t)
-            poly = _stack_polygon(xs_mm, ys_mm, xc, t, p.plate_diameter_mm, to_px, s)
-            _fill(canvas, poly, PLATE_BGR, PLATE_EDGE_BGR, 1.0 * p.supersample)
-        xc = sign * (x0 + p.plates_per_side * t + p.collar_width_mm / 2)
-        poly = _stack_polygon(xs_mm, ys_mm, xc, p.collar_width_mm, p.collar_height_mm, to_px, s)
-        _fill(canvas, poly, COLLAR_BGR, (20, 20, 20), 1.0 * p.supersample)
+def _fill_exact(canvas: np.ndarray, poly: np.ndarray, bgr) -> None:
+    """Konvexes Viereck mit Flächenabdeckung je Pixel (Pixelmitten-Koordinaten).
+
+    ``cv2.fillPoly`` bläht Flächen um bis zu ein halbes Pixel auf; für die Bänder, deren
+    Oberkante gemessen wird, wäre das ein systematischer Fehler der Ground Truth.
+    """
+    poly = np.asarray(poly, np.float64)
+    centre = poly.mean(axis=0)
+    x0, y0 = np.floor(poly.min(axis=0)).astype(int) - 1
+    x1, y1 = np.ceil(poly.max(axis=0)).astype(int) + 2
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float64)
+    cov = np.ones_like(xx)
+    for a, b in zip(poly, np.roll(poly, -1, axis=0), strict=True):
+        e = b - a
+        n = np.array([e[1], -e[0]]) / np.hypot(*e)
+        if (centre - a) @ n < 0:
+            n = -n  # Normale nach innen
+        d = (xx - a[0]) * n[0] + (yy - a[1]) * n[1]
+        cov *= np.clip(d + 0.5, 0.0, 1.0)
+    roi = canvas[y0:y1, x0:x1].astype(np.float32)
+    alpha = cov[..., None].astype(np.float32)
+    canvas[y0:y1, x0:x1] = np.round(roi * (1 - alpha) + np.float32(bgr) * alpha).astype(np.uint8)
+
+
+def _circle(canvas, cx, cy, r, bgr) -> None:
+    c = (int(round(cx * 16)), int(round(cy * 16)))
+    cv2.circle(canvas, c, int(round(r * 16)), bgr, -1, cv2.LINE_AA, shift=4)
 
 
 def render(
-    bar: BarModel,
+    bar: Bar,
     d1_mm: float,
-    support_offset_mm: float,
+    geometry: Geometry | None = None,
     params: SimParams | None = None,
     rng: np.random.Generator | None = None,
 ) -> SimResult:
-    """Rendert ein Bild einer Stange mit der Durchbiegung ``d1_mm``."""
+    """Rendert ein Bild einer Stange mit der Durchbiegung ``d1_mm`` (Mitte zur Kugel-Sehne)."""
+    g = geometry or Geometry()
     p = params or SimParams()
     rng = rng or np.random.default_rng(0)
     ss = p.supersample
-    s = p.scale_px_per_mm * ss  # px pro mm auf der Superauflösungs-Leinwand
-    width = int(round((bar.total_length_mm + 2 * p.margin_mm) * s))
-    height = int(round(p.height_mm * s))
-    ox = width / 2.0
-    oy = p.origin_frac * height
+    s = p.scale_px_per_mm * ss
+    half = bar.total_length_mm / 2.0
+    end_x = half + g.ball_offset_mm
+    # Leinwand als Vielfaches von ss, damit das Herunterskalieren exakt um den Faktor ss erfolgt
+    width = ss * int(round((2 * end_x + g.ball_diameter_mm + 2 * p.margin_mm) * s / ss))
+    height = ss * int(round(p.height_mm * s / ss))
+    ox = width / 2.0 + p.shift_px[0] * ss
+    oy = p.origin_frac * height + p.shift_px[1] * ss
 
     def to_px(x: float, y: float) -> tuple[float, float]:
         return ox + s * x, oy - s * y
 
-    # Hintergrund mit leichtem Helligkeitsverlauf
-    grad = np.linspace(215, 235, width, dtype=np.float32)[None, :]
+    grad = np.linspace(p.background - 8, p.background + 8, width, dtype=np.float32)[None, :]
     canvas = np.repeat(np.repeat(grad[:, :, None], height, axis=0), 3, axis=2).astype(np.uint8)
 
-    # Stange: Schaft und Sleeves als Polylinien unterschiedlicher Dicke
-    half = bar.total_length_mm / 2.0
-    xs_mm = np.arange(-half, half + 1.0, 1.0)
-    ys_mm = bend_profile(xs_mm, bar, support_offset_mm, d1_mm)
+    xs_mm = np.arange(-end_x, end_x + 0.5, 0.5)
+    ys_mm = bend_profile(xs_mm, bar, g.support_offset_loaded_mm, d1_mm, end_x)
     pts = np.array([to_px(x, y) for x, y in zip(xs_mm, ys_mm, strict=True)])
+
+    # Stange: Schaft, Sleeves, Kappen
     shaft_half = bar.shaft_length_mm / 2.0
-    sleeve = np.abs(xs_mm) > shaft_half
-    steel = (150, 148, 145)
-    for mask, dia in ((~sleeve, bar.shaft_diameter_mm), (sleeve, SLEEVE_DIAMETER_MM)):
+    ax = np.abs(xs_mm)
+    parts = (
+        (ax <= shaft_half, bar.shaft_diameter_mm, STEEL_BGR),
+        ((ax > shaft_half) & (ax <= half), SLEEVE_DIAMETER_MM, STEEL_BGR),
+        ((ax > half) & (ax <= end_x - g.ball_diameter_mm / 2), 55.0, CAP_BGR),
+    )
+    for mask, dia, col in parts:
         for seg in np.split(pts[mask], np.where(np.diff(np.where(mask)[0]) > 1)[0] + 1):
             if len(seg) > 1:
                 cv2.polylines(
                     canvas,
                     [np.round(seg).astype(np.int32)],
                     False,
-                    steel,
-                    thickness=max(int(round(dia * s)), 1),
-                    lineType=cv2.LINE_AA,
+                    col,
+                    max(int(round(dia * s)), 1),
+                    cv2.LINE_AA,
                 )
 
-    # Scheiben und Klemmen auf den Sleeves (Scheiben stehen senkrecht zur Stangenachse)
+    # Scheiben und Klemmen (senkrecht zur Stangenachse), innen am Sleeve-Anschlag
+    x0 = shaft_half + 5.0
+    t = p.plate_thickness_mm
     if p.plates_per_side > 0:
-        _draw_plates(canvas, bar, xs_mm, ys_mm, p, to_px, s)
+        for sign in (-1.0, 1.0):
+            for k in range(p.plates_per_side):
+                xc = sign * (x0 + (k + 0.5) * t)
+                poly = _rect_on_axis(xs_mm, ys_mm, xc, t, p.plate_diameter_mm, to_px)
+                _fill(canvas, poly, PLATE_BGR, PLATE_EDGE_BGR, ss)
+            xc = sign * (x0 + p.plates_per_side * t + p.collar_width_mm / 2)
+            poly = _rect_on_axis(xs_mm, ys_mm, xc, p.collar_width_mm, p.collar_height_mm, to_px)
+            _fill(canvas, poly, COLLAR_BGR)
 
-    # Mittenmarker: Klebeband (Rechteck um die Achse)
-    cx, cy = to_px(0.0, float(ys_mm[len(ys_mm) // 2]))
-    tw, th = TAPE_WIDTH_MM * s, (bar.shaft_diameter_mm + 4.0) * s
-    _blend_rect(canvas, cx - tw / 2, cx + tw / 2, cy - th / 2, cy + th / 2, TAPE_BGR)
-
-    # Gelbe Kugeln an den Sleeve-Enden (Mittelpunkt = Endpunkt, optional hängend)
-    r_ball = p.ball_diameter_mm / 2.0 * s
-    balls = {
-        "left": to_px(-half, float(ys_mm[0]) - p.ball_hang_mm),
-        "right": to_px(half, float(ys_mm[-1]) - p.ball_hang_mm),
+    # Gelbe Bänder: Mitte und Ringmarkierungen (umlaufend, Schaft + 2 x Bandstärke)
+    tape_h = bar.shaft_diameter_mm + 2 * g.tape_thickness_mm
+    tapes = {
+        "centre": 0.0,
+        "ring_left": -bar.ring_spacing_mm / 2,
+        "ring_right": bar.ring_spacing_mm / 2,
     }
-    for bx, by in balls.values():
-        cv2.circle(
-            canvas,
-            (int(round(bx * 16)), int(round(by * 16))),
-            int(round(r_ball * 16)),
-            BALL_BGR,
-            thickness=-1,
-            lineType=cv2.LINE_AA,
-            shift=4,
-        )
+    points = {}
+    for name, xt in tapes.items():
+        poly = _rect_on_axis(xs_mm, ys_mm, xt, g.tape_width_mm, tape_h, to_px)
+        _fill_exact(canvas, poly, YELLOW_BGR)
+        points[name] = to_px(xt, float(np.interp(xt, xs_mm, ys_mm)))
+        flap = p.tape_flaps_mm.get(name, 0.0)
+        if flap > 0:  # gelöstes Bandende hängt unter dem Schaft herab
+            yb = float(np.interp(xt, xs_mm, ys_mm)) - tape_h / 2 + 1.0
+            fw, dx = 0.8 * g.tape_width_mm, flap * np.sin(np.radians(p.flap_angle_deg))
+            corners = [(xt - fw / 2, yb), (xt + fw / 2, yb),
+                       (xt + fw / 2 + dx, yb - flap), (xt - fw / 2 + dx, yb - flap)]  # fmt: skip
+            _fill(canvas, np.array([to_px(*c) for c in corners]), YELLOW_BGR)
 
-    # ArUco-Referenzmarker im Hintergrund, mittig über der Stange
-    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
-    inner = int(round(p.aruco_size_mm * p.aruco_scale_ratio * s))
-    border = int(round(MARKER_BORDER_MM * p.aruco_scale_ratio * s))
-    img = cv2.aruco.generateImageMarker(dictionary, ARUCO_ID, inner)
-    img = cv2.copyMakeBorder(img, border, border, border, border, cv2.BORDER_CONSTANT, value=255)
-    ax, ay = to_px(0.0, p.aruco_offset_mm)
-    _paste_marker(canvas, cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), ax, ay)
+    # Kugeln auf der Achse, 35 mm hinter der Sleeve-Stirn
+    r_ball = g.ball_diameter_mm / 2.0 * s
+    for name, xb in (("left", -end_x), ("right", end_x)):
+        points[name] = to_px(xb, float(np.interp(xb, xs_mm, ys_mm)))
+        _circle(canvas, *points[name], r_ball, YELLOW_BGR)
 
-    points = {**balls, "centre": (cx, cy), "aruco": (ax, ay)}
+    # Störobjekte: gelbe Monolift-Knöpfe oberhalb der Stange
+    if p.distractors:
+        for sign in (-1.0, 1.0):
+            _circle(canvas, *to_px(sign * KNOB_X_MM, KNOB_Y_MM), KNOB_D_MM / 2 * s, YELLOW_BGR)
 
-    # Kamerarollen
     if p.roll_deg:
         m = cv2.getRotationMatrix2D((width / 2.0, height / 2.0), p.roll_deg, 1.0)
         canvas = cv2.warpAffine(
-            canvas, m, (width, height), flags=cv2.INTER_LINEAR, borderValue=(225, 225, 225)
+            canvas,
+            m,
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderValue=(p.background,) * 3,
         )
         points = {k: tuple(m @ np.array([x, y, 1.0])) for k, (x, y) in points.items()}
 
-    # Herunterskalieren (Flächenmittelung => Subpixel-Antialiasing), Unschärfe, Rauschen
     out_w, out_h = width // ss, height // ss
     img = cv2.resize(canvas, (out_w, out_h), interpolation=cv2.INTER_AREA).astype(np.float32)
-    # Pixelmitte-Konvention: Superauflösungs-Koordinate u -> (u + 0.5) / ss - 0.5
     points = {k: ((x + 0.5) / ss - 0.5, (y + 0.5) / ss - 0.5) for k, (x, y) in points.items()}
     if p.blur_sigma_px > 0:
         img = cv2.GaussianBlur(img, (0, 0), p.blur_sigma_px)
@@ -257,30 +250,24 @@ def render(
     if p.noise_sigma > 0:
         img = img + rng.normal(0.0, p.noise_sigma, img.shape).astype(np.float32)
     img = np.clip(img, 0, 255).astype(np.uint8)
-    return SimResult(img, d1_mm, p.scale_px_per_mm, points)
+
+    y0 = float(np.interp(0.0, xs_mm, ys_mm))
+    dring = y0 - float(np.interp(bar.ring_spacing_mm / 2, xs_mm, ys_mm))
+    return SimResult(img, d1_mm, dring, p.scale_px_per_mm, points)
 
 
 # --------------------------------------------------------------------------- Datensatz
 
 
-def synthetic_d1_mm(
-    bar: BarModel, load_kg: float, bar_factor: float, is_baseline: bool, rng: np.random.Generator
-) -> float:
-    """Plausibles, aber rein synthetisches Lastmodell: D1 ~ Last / d^4 (Balkentheorie)."""
-    if is_baseline:
-        return 0.0
-    c0 = 0.0296  # mm/kg bei 29 mm; ergibt ca. 12 mm bei 425 kg
-    eff = max(load_kg - bar.weight_kg, 0.0)
-    length_factor = (bar.shaft_length_mm / 1310.0) ** 2
-    d1 = c0 * eff * (29.0 / bar.shaft_diameter_mm) ** 4 * length_factor * bar_factor
-    return float(d1 * (1.0 + rng.normal(0.0, 0.01)))
+def synthetic_compliance_mm_per_kg(bar: Bar, bar_factor: float = 1.0) -> float:
+    """Rein synthetisches Lastmodell: Nachgiebigkeit ~ Schaftlänge^2 / d^4 (Balkentheorie).
 
-
-def plates_for_load(load_kg: float, bar_weight_kg: float = 20.0) -> int:
-    """25-kg-Scheiben je Seite: 20 kg = leere Stange, sonst Last = 25 + 50 * n (inkl. Klemmen)."""
-    if load_kg <= bar_weight_kg:
-        return 0
-    return int(round((load_kg - 25.0) / 50.0))
+    Größenordnung wie im Shooting: Power ca. 70 mm, Deadlift ca. 105 mm bei 405 kg.
+    """
+    c0 = 0.17  # mm/kg bei 29 mm Schaft und 1310 mm Schaftlänge
+    return (
+        c0 * (29.0 / bar.shaft_diameter_mm) ** 4 * (bar.shaft_length_mm / 1310.0) ** 2 * bar_factor
+    )
 
 
 def generate_dataset(
@@ -290,11 +277,17 @@ def generate_dataset(
     params: SimParams | None = None,
     seed: int | None = None,
     roll_sd_deg: float = 0.3,
+    shift_sd_px: float = 3.0,
+    prebend_sd_mm: float = 2.0,
     only_bars: list[str] | None = None,
     n_jobs: int = -1,
 ) -> pd.DataFrame:
-    """Schreibt Bilder, ``manifest.csv`` und ``truth.csv`` nach ``out_dir`` (gibt Truth zurück)."""
-    from .manifest import expected_design, sha256_of
+    """Schreibt Bilder, ``manifest.csv``, ``truth.csv`` und ``analysis.yaml`` nach ``out_dir``.
+
+    ``analysis.yaml`` ist die übergebene Config mit Detektionsparametern für die Synthetik
+    (nominaler Maßstab = Simulationsmaßstab, keine ROI).
+    """
+    from .manifest import COLUMNS, expected_design, sha256_of
 
     out_dir = Path(out_dir)
     base = params or SimParams()
@@ -305,33 +298,30 @@ def generate_dataset(
     bar_ids = bars.bar_ids()
 
     def one(i: int, row) -> dict:
-        bar = bars.model_of(row.bar_id)
-        ss = np.random.SeedSequence([seed, bar_ids.index(row.bar_id), i])
-        rng = np.random.default_rng(ss)
-        factor = 1.0 + 0.05 * np.random.default_rng([seed, bar_ids.index(row.bar_id)]).normal()
-        d1 = synthetic_d1_mm(bar, row.load_kg, factor, row.is_baseline, rng)
-        n_plates = 0 if row.is_baseline else plates_for_load(row.load_kg)
-        p = SimParams(
-            **{
-                **base.__dict__,
-                "roll_deg": float(rng.normal(0.0, roll_sd_deg)),
-                "plates_per_side": n_plates,
-            }
+        bar = bars.bar(row.bar_id)
+        b = bar_ids.index(row.bar_id)
+        c = cfg.cycles.index(row.cycle)
+        rng = np.random.default_rng(np.random.SeedSequence([seed, b, c, int(row.step)]))
+        factor = 1.0 + 0.05 * np.random.default_rng([seed, b]).normal()
+        d0 = prebend_sd_mm * np.random.default_rng([seed, b, c, 999]).normal()
+        delta = synthetic_compliance_mm_per_kg(bar, factor) * row.added_mass_kg
+        p = replace(
+            base,
+            roll_deg=float(rng.normal(0.0, roll_sd_deg)),
+            shift_px=(float(rng.normal(0, shift_sd_px)), float(rng.normal(0, shift_sd_px))),
+            plates_per_side=int(row.plates_per_side),
         )
-        res = render(bar, d1, cfg.support_offset_mm, p, rng)
-        tag = "baseline" if row.is_baseline else f"{row.load_kg:g}kg"
-        rel = Path(row.bar_id) / f"run{row.run}_{tag}.jpg"
+        res = render(bar, d0 + delta, cfg.geometry, p, rng)
+        rel = Path(row.bar_id) / f"{row.cycle}_{int(row.step):02d}.jpg"
         (out_dir / rel).parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(out_dir / rel), res.image, [cv2.IMWRITE_JPEG_QUALITY, 95])
         return {
-            "bar_id": row.bar_id,
-            "run": row.run,
-            "load_kg": row.load_kg,
-            "is_baseline": row.is_baseline,
+            **{k: getattr(row, k) for k in COLUMNS[:6]},
             "image_path": rel.as_posix(),
             "image_sha256": sha256_of(out_dir / rel),
-            "d1_true_mm": d1,
-            "plates_per_side": n_plates,
+            "d1_true_mm": d0 + delta,
+            "delta_d1_true_mm": delta,
+            "dring_true_mm": res.dring_mm,
             "scale_px_per_mm": res.scale_px_per_mm,
             "roll_deg": p.roll_deg,
         }
@@ -340,7 +330,14 @@ def generate_dataset(
     truth = pd.DataFrame(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
     truth.to_csv(out_dir / "truth.csv", index=False)
-    truth[["bar_id", "run", "load_kg", "is_baseline", "image_path", "image_sha256"]].to_csv(
-        out_dir / "manifest.csv", index=False
+    truth[COLUMNS].to_csv(out_dir / "manifest.csv", index=False)
+    sim_cfg = cfg.model_copy(
+        update={
+            "detection": cfg.detection.model_copy(
+                update={"nominal_px_per_mm": base.scale_px_per_mm, "roi_frac": None}
+            )
+        }
     )
+    with (out_dir / "analysis.yaml").open("w", encoding="utf-8") as f:
+        yaml.safe_dump(sim_cfg.model_dump(mode="json"), f, sort_keys=False, allow_unicode=True)
     return truth

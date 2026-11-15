@@ -147,4 +147,16 @@ Formulierung im Ergebnis: „keine Abweichung oberhalb der Nachweisgrenze“, ni
 
 ## 11. Nachträge
 
-_Keine._
+**N1 (15.11.2026, vor Berechnung echter Durchbiegungen): Zuordnung der Marker geometrisch statt über die Blobgröße (betrifft 4.2).**
+Umsetzung: Zuerst werden Ringbänder und Mittenband als drei fast kollineare gelbe Blobs gesucht (Mitte genau zwischen den äußeren, Abstand der äußeren ≈ Ringabstand × nominaler Maßstab ± 30 %). Die Kugeln sind dann je Seite der Blob, der der aus Ringabstand und Kugelabstand (L + 70 mm) vorhergesagten Position am nächsten liegt, in einem Fenster unterhalb der Ringlinie. Ohne Ringbänder: äußerstes Blobpaar mit passendem Abstand als Kugeln, Flag `missing_ring`.
+Begründung: Bewegungsunschärfe (Handauslösung, 1/15 s) verändert Größe und Form der Blobs, und bei einer fehlenden Kugel (OhioDeadliftB9680) würde „die äußersten Blobs“ ein Ringband als Kugel wählen. Zielgrößen, Skala und Statistik bleiben unverändert.
+
+**N2 (15.11.2026, vor Berechnung echter Durchbiegungen): Bänder messen die Schaftachse statt des Flächenschwerpunkts (betrifft 4.3).**
+Anlass: An einzelnen Fotos hat sich ein Band gelöst und hängt unter dem Schaft herab (z. B. Mittenband, Beispielfoto vom 15.11.2026). Ein Lappen von 2–4 cm verschiebt den Schwerpunkt um 8–18 mm (Simulation) und damit D1 bzw. ΔD1.
+Umsetzung, **für alle Bänder in allen Fotos gleich** (ein Methodenwechsel innerhalb eines Zyklus würde in ΔD1 einen Sprung erzeugen):
+1. Je Spalte mit vollem Gelbanteil die Oberkante des Bandes aus der Fläche unter dem Gelbprofil (Subpixel; exakt bei Antialiasing und symmetrischer Unschärfe). Spalten, die erst an der Bandunterseite beginnen (nur Lappen), fallen heraus.
+2. Gerade durch die Oberkanten → lokale Schaftneigung. Bandmittellinie aus dem Schwerpunkt der Zone zwischen Oberkante und Oberkante + Schaftradius (der Lappen hängt darunter).
+3. Messpunkt = Schnitt Bandmittellinie/Oberkante, verschoben um r = d/2 + Bandstärke (0,15 mm, Annahme) senkrecht zur Schaftrichtung. Der Radius in px kommt aus dem Ringabstand im selben Bild.
+4. Flag `tape_hanging_<marker>`, wenn das Band höher als 1,3 × (d + 2 · Bandstärke) ist.
+Konstante Restfehler (Annahme Bandstärke, Schattierung der Oberkante) kürzen sich in ΔD1 und ΔD_ring heraus.
+Sensitivitätsanalyse: Die bisherige Schwerpunktmethode wird weiter berechnet (`d1_px_centroid`, `delta_d1_centroid_mm`, `compliance_centroid_mm_per_100kg`). Validierung auf Synthetik: Achse auf ≤ 0,2 px (x) bzw. ≤ 0,05 px (y), D1-Fehler ≤ 0,05 mm, auch mit 40 mm Lappen und geneigtem Schaft.
