@@ -4,7 +4,6 @@ from barbellscan.config import load_analysis, load_bars
 from barbellscan.deflection import add_deflection, cycle_summary
 from barbellscan.plots import _spread_labels, bar_label, make_all
 from barbellscan.stats import run_all
-
 from test_stats import _tracking
 
 
