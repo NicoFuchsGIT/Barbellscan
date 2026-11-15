@@ -1,6 +1,6 @@
 # Roadmap – Barbellscan
 
-Stand: 15.11.2026 (CW 46). Maßgeblich für Inhalt und Methode ist der [Analyseplan](ANALYSIS_PLAN.md) v1.0 mit den Nachträgen N1–N4; diese Roadmap regelt nur Reihenfolge und Termine. Die ursprüngliche Planung (14 Stangen × 5 Runs × 10 Fotos, ArUco-Skala, ChArUco-Kalibrierung) ist überholt und steht in der Git-Historie.
+Stand: 15.11.2026 (CW 46). Maßgeblich für Inhalt und Methode ist der [Analyseplan](ANALYSIS_PLAN.md) v1.0 mit den Nachträgen N1–N5; diese Roadmap regelt nur Reihenfolge und Termine. Die ursprüngliche Planung (14 Stangen × 5 Runs × 10 Fotos, ArUco-Skala, ChArUco-Kalibrierung) ist überholt und steht in der Git-Historie.
 
 ## Fixtermine
 
@@ -22,7 +22,8 @@ Stand: 15.11.2026 (CW 46). Maßgeblich für Inhalt und Methode ist der [Analysep
 | `track`, `deflect`: Skala aus den Ringbändern, D1, ΔD1, ΔD_ring, Kenngrößen je Zyklus | ✅ auf Synthetik |
 | Ausschlussliste und Sensitivitätsläufe (`data/exclusions.csv`, `--drop-qc-flag`) | ✅ |
 | Statistik nach Plan 6: H1, Deskriptiv, H2, ICC/SEM/MDC95 (`stats`) | ✅ gegen Referenzwerte getestet |
-| **Pilotlauf auf den echten Fotos** | ❌ offen, blockiert alles Weitere |
+| Pilotlauf der Detektion auf den echten Fotos | ✅ 663/663 ausgewertet, 1 Kugel fehlt (bekannt); Bandmessung danach umgestellt (N5) |
+| **Neuer `track`-Lauf mit N5, Overlay-Sichtung, `deflect`, `stats`** | ❌ nächster Schritt |
 | Plumb-Line-Prüfung der Restverzeichnung (Plan 4.4) | ❌ |
 | Unsicherheitsbudget mit Monte-Carlo (Plan 6.4) | ❌ |
 | Balkenmodell als Gegenprobe (V4) | ❌ (Rechenkern liegt als Testhilfe in `tests/test_stats.py`) |

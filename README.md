@@ -25,7 +25,7 @@ uv run barbellscan stats
 | Befehl | Ergebnis |
 |---|---|
 | `check-manifest --verify` | Vollständigkeit (13 × 3 × 17) und SHA-256 jeder Bilddatei |
-| `track` | `data/derived/tracking.csv`: Markerpositionen (px; Bänder als Punkt auf der Schaftachse, robust gegen herabhängende Bandenden), Kugel-/Ringabstand, `d1_px`, `dring_px`, Detektions-Flags (u. a. `tape_hanging_*`, `missing_*`); mit `--overlay-dir` ein QC-Bild je Foto |
+| `track` | `data/derived/tracking.csv`: Markerpositionen (px; Bänder als Schwerpunkt in der Schaftzone, herabhängende Bandenden zählen nicht mit), Kugel-/Ringabstand, `d1_px`, `dring_px`, Detektions-Flags (u. a. `tape_hanging_*`, `missing_*`); mit `--overlay-dir` ein QC-Bild je Foto |
 | `deflect` | `data/derived/deflection.csv` (Skala je Zyklus, D1, ΔD1, ΔD_ring in mm), `cycle_summary.csv` (Nachgiebigkeit, ΔD1 bei 405 kg, Restverformung, Hysterese je Zyklus), `bar_summary.csv` (je Stange) |
 | `stats` | `data/derived/stats/`: `h1.csv` (exakter Permutationstest Deadlift vs. Power), `bars.csv` (Kenngrößen je Stange mit 95-%-KI), `categories.csv`, `pairs.csv` (Welch-Differenzen innerhalb eines Typs), `reliability.csv` (ICC(1,1), SEM, MDC95), `h2.csv` (Linearität, Restverformung, Hysterese gegen MDC95) |
 | `overlay <bild> --bar <bar_id>` | QC-Bild für ein einzelnes Foto (zum Justieren von ROI/Schwellen in `config/analysis.yaml`) |

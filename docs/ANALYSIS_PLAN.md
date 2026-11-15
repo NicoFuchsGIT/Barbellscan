@@ -173,3 +173,25 @@ Grenze: Das Moment setzt die Auflage an den Hook-Außenkanten voraus. Liegt die 
 
 **N4 (15.11.2026): Ausschlussliste (Klarstellung zu Abschnitt 7, keine neue Regel).**
 Bilder mit dokumentiertem Detektionsfehler stehen mit Begründung in `data/exclusions.csv` (`image, reason`) und werden als fehlender Wert behandelt (`exclusion_reason`, Flag `excluded`). Sensitivitätsanalysen ohne geflaggte Bilder laufen über `deflect --drop-qc-flag <flag>`.
+
+**N5 (15.11.2026, nach dem Pilotlauf der Detektion auf allen 663 Fotos): Messpunkt der Bänder ist der Schwerpunkt in der Schaftzone; die Oberkanten-Methode aus N2 wird Sensitivitätsanalyse (betrifft 4.3 und N2).**
+Offenlegung: Dieser Nachtrag entstand, nachdem `tracking.csv` (Pixelwerte) der echten Fotos vorlag. Entschieden wurde allein nach der Messqualität innerhalb der Zyklen, nicht nach Unterschieden zwischen Stangen oder Kategorien. Die Stangenkennwerte wurden danach erstmals berechnet.
+Anlass: Auf den Bändern liegt ein Glanzstreifen (vor allem rechtes Ringband), der die Oberkante im Gelbprofil verfälscht. Kriterium war die Streuung um einen glatten (quadratischen) Verlauf je Zyklus auf dem Belastungsast, gemittelt über alle 39 Zyklen:
+
+| Größe | Oberkante (N2) | Schwerpunkt |
+|---|---|---|
+| D1 | 2,3 px | 1,1 px |
+| D_ring | 2,9 px | 0,6 px |
+| Ringabstand | 2,8 px | 1,4 px |
+
+Bei 47 Bildern schlug die Oberkanten-Anpassung am rechten Ringband ganz fehl. Umgekehrt ist der Schwerpunkt der ganzen Fläche bei einem wirklich herabhängenden Band unbrauchbar (TexasPower, Zyklus C, Stufen 8–14: Mittenband 25 px zu tief).
+Umsetzung, für alle Bänder in allen Fotos gleich:
+1. Grobe Oberkante des Bandes (je Spalte erste Zeile mit einem Viertel des Spaltenmaximums, 20. Perzentil über die Spalten).
+2. Messpunkt = gewichteter Schwerpunkt der gelben Fläche zwischen Oberkante und Oberkante + 1,05 × (d + 2 · Bandstärke). Ohne Lappen ist das der Schwerpunkt der ganzen Fläche (Synthetik: Unterschied < 0,05 px); die Oberkante bestimmt nur die untere Grenze.
+3. Flag `tape_hanging_<marker>`, wenn mehr als 5 % der gelben Fläche unterhalb der Zone liegen.
+Restfehler: Bei herabhängendem Band bleibt der Teil des Lappens innerhalb der 5-%-Marge in der Zone; auf Synthetik in Echtauflösung −0,6 mm in D1, unabhängig von der Lappenlänge (10–40 mm). Ohne Lappen kein Fehler.
+Sensitivitätsanalysen: Oberkanten-Methode (`d1_px_axis`, `delta_d1_axis_mm`, `compliance_axis_mm_per_100kg`) und Schwerpunkt der ganzen Fläche (`*_centroid`).
+
+**Befunde aus dem Pilotlauf, die keine Planänderung sind, aber berichtet werden:**
+- Der Ringabstand in px ist bei leerer Stange (Stufe 0 und 16) um 0,3–0,4 % größer als unter Last, ebenso der Kugelabstand. Die leere Stange liegt also rund 10 mm näher an der Kamera in den Hooks. Die Skala je Zyklus (Stufe 0 und 16, Abschnitt 5) ist dadurch für die belasteten Bilder um diesen Betrag zu groß, ΔD1 entsprechend um 0,3–0,4 % zu klein, für alle Stangen gleich. Sensitivitätsanalyse: Skala je Bild.
+- Die Gegenprobe der Skala über den Kugelabstand liegt bei allen Stangen 1,0–1,2 % unter der Ring-Skala (bei der kürzeren TexasDeadlift 2,6 %). Das Muster über die Stangenlängen passt zu einem Kugelversatz von etwa 22 statt 35 mm je Seite; Kugelversatz und Bandabstand werden nachgemessen. Die primäre Skala (Ringbänder) bleibt.

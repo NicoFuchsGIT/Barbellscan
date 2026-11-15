@@ -53,6 +53,8 @@ PX_COLUMNS = [
     "dring_px",
     "d1_px_centroid",
     "dring_px_centroid",
+    "d1_px_axis",
+    "dring_px_axis",
 ]
 
 
@@ -129,12 +131,15 @@ def add_deflection(
     )
     df = df.merge(scale.drop(columns=["ring_px", "ball_px"]), on=key, how="left")
 
-    # Primär: Bänder auf der Schaftachse; "_centroid": Schwerpunkt der Bandfläche (Sensitivität)
+    # Primär: Band-Schwerpunkt in der Schaftzone (N5). Sensitivität: "_centroid" = Schwerpunkt
+    # der ganzen Bandfläche, "_axis" = Schaftachse aus der Bandoberkante (N2)
     px_cols = {
         "d1": "d1_px",
         "dring": "dring_px",
         "d1_centroid": "d1_px_centroid",
         "dring_centroid": "dring_px_centroid",
+        "d1_axis": "d1_px_axis",
+        "dring_axis": "dring_px_axis",
     }
     quantities = list(px_cols)
     for q, col in px_cols.items():
@@ -217,10 +222,11 @@ def cycle_summary(df: pd.DataFrame, cfg: AnalysisConfig) -> pd.DataFrame:
             else np.nan
         )
         r["n_hysteresis_pairs"] = len(pairs)
-        upc = up.dropna(subset=["delta_d1_centroid_mm"])
-        if len(upc) >= 3:
-            b1c, _ = np.polyfit(upc["added_mass_kg"], upc["delta_d1_centroid_mm"], 1)
-            r["compliance_centroid_mm_per_100kg"] = 100 * b1c
+        for tag in ("centroid", "axis"):
+            alt = g[g["phase"] == "up"].dropna(subset=[f"delta_d1_{tag}_mm"])
+            if len(alt) >= 3:
+                b1a, _ = np.polyfit(alt["added_mass_kg"], alt[f"delta_d1_{tag}_mm"], 1)
+                r[f"compliance_{tag}_mm_per_100kg"] = 100 * b1a
         rows.append(r)
     return pd.DataFrame(rows)
 
@@ -239,6 +245,7 @@ def bar_summary(cycles: pd.DataFrame, bars: BarCatalog) -> pd.DataFrame:
         "resid_sd_mm",
         "implied_length_mm",
         "compliance_centroid_mm_per_100kg",
+        "compliance_axis_mm_per_100kg",
     ]
     cols = [c for c in cols if c in cycles]
     g = cycles.groupby("bar_id", sort=False)[cols]

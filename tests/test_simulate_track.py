@@ -64,7 +64,7 @@ def test_tracking_recovers_deflection_and_ring_scale(bar_id, d1, plates):
 
 
 def test_marker_points_match_truth_to_subpixel():
-    """Kugeln: Mittelpunkt; Bänder: Punkt auf der Schaftachse (Plan, Nachtrag N2)."""
+    """Kugeln: Mittelpunkt; Bänder: Schwerpunkt in der Schaftzone (Plan, Nachtrag N5)."""
     res = _render("texas_deadlift", 80.0, plates_per_side=6, roll_deg=0.3)
     row = _track(res, "texas_deadlift")
     for name, truth in res.points_px.items():
@@ -89,16 +89,35 @@ def test_tape_axis_from_top_edge_is_exact_for_tilted_band(theta):
 
 
 @pytest.mark.parametrize("angle", [8.0, -25.0])
-def test_hanging_tape_does_not_bias_axis_and_is_flagged(angle):
+@pytest.mark.parametrize("scale", [1.0, 2.36])
+def test_hanging_tape_is_clipped_to_shaft_zone_and_flagged(angle, scale):
     flaps = {"centre": 30.0, "ring_left": 25.0}
     res = _render("ohio_power", 70.0, plates_per_side=8, roll_deg=0.4, tape_flaps_mm=flaps,
-                  flap_angle_deg=angle)  # fmt: skip
-    row = _track(res, "ohio_power")
+                  flap_angle_deg=angle, scale_px_per_mm=scale, supersample=2)  # fmt: skip
+    cfg = SIM_CFG.model_copy(
+        update={"detection": SIM_CFG.detection.model_copy(update={"nominal_px_per_mm": scale})}
+    )
+    row = track_image(res.image, BARS.bar("ohio_power"), cfg)
     assert set(row["detect_flags"].split(";")) == {"tape_hanging_centre", "tape_hanging_ring_left"}
-    scale = row["ring_dist_px"] / 810
-    assert row["d1_px"] / scale == pytest.approx(70.0, abs=0.15)
-    assert row["dring_px"] / scale == pytest.approx(res.dring_mm, abs=0.15)
-    assert row["d1_px_centroid"] / scale < 70.0 - 5.0  # Schwerpunkt wäre stark verfälscht
+    s = row["ring_dist_px"] / 810
+    tol = 0.7 if scale > 2 else 1.0  # Rest des Lappens in der Zone; 1 px/mm ist gröber
+    assert row["d1_px"] / s == pytest.approx(70.0, abs=tol)
+    assert row["dring_px"] / s == pytest.approx(res.dring_mm, abs=tol)
+    assert row["d1_px_centroid"] / s < 70.0 - 5.0  # Schwerpunkt der ganzen Fläche: stark verfälscht
+    assert row["d1_px_axis"] / s == pytest.approx(70.0, abs=0.15)  # Oberkanten-Methode (N2)
+
+
+def test_without_flap_shaft_zone_centroid_equals_plain_centroid():
+    res = _render("texas_deadlift", 90.0, plates_per_side=8, roll_deg=-0.5, scale_px_per_mm=2.36,
+                  supersample=2)  # fmt: skip
+    cfg = SIM_CFG.model_copy(
+        update={"detection": SIM_CFG.detection.model_copy(update={"nominal_px_per_mm": 2.36})}
+    )
+    row = track_image(res.image, BARS.bar("texas_deadlift"), cfg)
+    assert row["detect_flags"] == ""
+    assert row["d1_px"] == pytest.approx(row["d1_px_centroid"], abs=0.05)
+    assert row["dring_px"] == pytest.approx(row["dring_px_centroid"], abs=0.05)
+    assert row["d1_px"] / 2.36 == pytest.approx(90.0, abs=0.1)
 
 
 def test_monolift_knobs_are_ignored_without_roi():
