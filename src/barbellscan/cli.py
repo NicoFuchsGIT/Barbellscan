@@ -1,4 +1,4 @@
-"""Kommandozeile. Weitere Befehle (simulate, track, ...) folgen in M1-M7."""
+"""Kommandozeile (ANALYSIS_PLAN v1.0)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,16 @@ import typer
 
 from . import __version__
 from .config import load_analysis, load_bars
-from .manifest import check_manifest, expected_design
+from .manifest import check_manifest, expected_design, from_qc_csv, verify_images
 
 app = typer.Typer(help="Barbellscan: Durchbiegungsanalyse von Langhanteln", no_args_is_help=True)
+
+BARS = typer.Option(Path("config/bars.yaml"), help="Stangen-Katalog")
+ANALYSIS = typer.Option(Path("config/analysis.yaml"), help="Analyse-Config")
+ImageRoot = Annotated[
+    Path | None,
+    typer.Option(help="Ordner mit den Bildern (statt Pfad relativ zum Manifest)"),
+]
 
 
 @app.command()
@@ -22,39 +29,56 @@ def version() -> None:
 
 
 @app.command()
-def design(
-    bars: Path = Path("config/bars.yaml"),
-    analysis: Path = Path("config/analysis.yaml"),
-) -> None:
-    """Studiendesign aus der Config zusammenfassen (Stangen, Bilder)."""
+def design(bars: Path = BARS, analysis: Path = ANALYSIS) -> None:
+    """Studiendesign aus der Config zusammenfassen."""
     catalog, cfg = load_bars(bars), load_analysis(analysis)
-    n_bars = len(catalog.bar_ids())
-    total = len(expected_design(catalog, cfg))
-    typer.echo(f"Modelle: {len(catalog.bars)}, physische Stangen: {n_bars}")
-    typer.echo(f"Laststufen: {cfg.loads_kg} (+ Baseline: {cfg.baseline_after_unload})")
-    typer.echo(f"Runs: {cfg.runs}, erwartete Bilder: {total}")
+    cats = pd.Series([b.category for b in catalog.bars]).value_counts()
+    typer.echo(f"Stangen: {len(catalog.bars)} ({', '.join(f'{k} {v}' for k, v in cats.items())})")
+    typer.echo(f"Zyklen: {', '.join(cfg.cycles)}; Stufen je Zyklus: {len(cfg.schedule())}")
+    typer.echo("Zusatzmasse: " + ", ".join(f"{s.added_mass_kg:g}" for s in cfg.schedule()) + " kg")
+    typer.echo(f"Erwartete Bilder: {len(expected_design(catalog, cfg))}")
+
+
+@app.command("import-qc")
+def import_qc(
+    qc_csv: Path,
+    out: Path = Path("data/manifest.csv"),
+    image_dir: str = typer.Option("raw", help="Bildordner relativ zum Manifest"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+) -> None:
+    """manifest_qc.csv (QC-Export) in das Manifest-Schema übersetzen."""
+    m = from_qc_csv(pd.read_csv(qc_csv), load_bars(bars), load_analysis(analysis), image_dir)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    m.to_csv(out, index=False)
+    typer.echo(f"{len(m)} Zeilen -> {out}")
 
 
 @app.command("check-manifest")
 def check_manifest_cmd(
     manifest: Path = Path("data/manifest.csv"),
-    bars: Path = Path("config/bars.yaml"),
-    analysis: Path = Path("config/analysis.yaml"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+    verify: bool = typer.Option(False, help="Bilddateien und SHA-256 prüfen"),
+    image_root: ImageRoot = None,
 ) -> None:
-    """Manifest auf Vollständigkeit, Duplikate und Unerwartetes prüfen."""
-    problems = check_manifest(pd.read_csv(manifest), load_bars(bars), load_analysis(analysis))
+    """Manifest auf Vollständigkeit, Duplikate und Konsistenz prüfen (optional SHA-256)."""
+    m = pd.read_csv(manifest, dtype={"cycle": str})
+    problems = check_manifest(m, load_bars(bars), load_analysis(analysis))
+    if verify:
+        problems += verify_images(m, manifest.parent, image_root)
     for p in problems:
         typer.echo(p)
     if problems:
         raise typer.Exit(code=1)
-    typer.echo("Manifest vollständig und konsistent.")
+    typer.echo(f"Manifest vollständig und konsistent ({len(m)} Bilder).")
 
 
 @app.command()
 def simulate(
     out: Path = Path("data/synthetic"),
-    bars: Path = Path("config/bars.yaml"),
-    analysis: Path = Path("config/analysis.yaml"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
     scale: float = typer.Option(1.0, help="Bildmaßstab in px/mm"),
     seed: int | None = typer.Option(None, help="Überschreibt den Seed aus der Config"),
     only: Annotated[
@@ -62,72 +86,182 @@ def simulate(
     ] = None,
     jobs: int = -1,
 ) -> None:
-    """Synthetischen Datensatz (Bilder, manifest.csv, truth.csv) erzeugen."""
+    """Synthetischen Datensatz (Bilder, manifest.csv, truth.csv, analysis.yaml) erzeugen."""
     from .simulate import SimParams, generate_dataset
 
     truth = generate_dataset(
         out,
         load_bars(bars),
         load_analysis(analysis),
-        SimParams(
-            scale_px_per_mm=scale,
-            aruco_size_mm=load_analysis(analysis).aruco_size_mm,
-            ball_diameter_mm=load_analysis(analysis).ball_diameter_mm,
-            ball_hang_mm=load_analysis(analysis).ball_hang_mm,
-        ),
+        SimParams(scale_px_per_mm=scale),
         seed=seed,
         only_bars=only or None,
         n_jobs=jobs,
     )
-    typer.echo(f"{len(truth)} Bilder nach {out} geschrieben.")
+    typer.echo(f"{len(truth)} Bilder nach {out} geschrieben (Config: {out / 'analysis.yaml'}).")
 
 
 @app.command()
 def track(
-    manifest: Path = Path("data/synthetic/manifest.csv"),
+    manifest: Path = Path("data/manifest.csv"),
     out: Path = Path("data/derived/tracking.csv"),
-    analysis: Path = Path("config/analysis.yaml"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+    image_root: ImageRoot = None,
+    overlay_dir: Annotated[
+        Path | None, typer.Option(help="QC-Overlay je Bild hierhin schreiben")
+    ] = None,
+    full_frame: bool = typer.Option(False, help="ROI ignorieren"),
     jobs: int = -1,
 ) -> None:
-    """Marker detektieren und D1 für alle Bilder des Manifests berechnen."""
+    """Marker in allen Bildern des Manifests detektieren (Ergebnis in Pixeln)."""
     from .tracking import track_manifest
 
-    cfg = load_analysis(analysis)
     df = track_manifest(
-        manifest, n_jobs=jobs, marker_size_mm=cfg.aruco_size_mm, ball_hang_mm=cfg.ball_hang_mm
+        manifest,
+        load_bars(bars),
+        load_analysis(analysis),
+        n_jobs=jobs,
+        full_frame=full_frame,
+        image_root=image_root,
+        overlay_dir=overlay_dir,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
-    flagged = int((df["quality_flags"].fillna("") != "").sum())
-    typer.echo(f"{len(df)} Bilder ausgewertet, {flagged} mit Flags -> {out}")
+    flagged = df[df["detect_flags"].fillna("") != ""]
+    typer.echo(f"{len(df)} Bilder ausgewertet, {len(flagged)} mit Detektions-Flags -> {out}")
+    for flag, n in flagged["detect_flags"].str.split(";").explode().value_counts().items():
+        typer.echo(f"  {flag}: {n}")
+
+
+@app.command()
+def deflect(
+    tracking: Path = Path("data/derived/tracking.csv"),
+    out: Path = Path("data/derived/deflection.csv"),
+    cycles_out: Path = Path("data/derived/cycle_summary.csv"),
+    bars_out: Path = Path("data/derived/bar_summary.csv"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+    exclusions: Annotated[
+        Path, typer.Option(help="Ausschlussliste (image, reason); fehlt die Datei, gilt keine")
+    ] = Path("data/exclusions.csv"),
+    drop_qc_flag: Annotated[
+        list[str] | None,
+        typer.Option(help="Sensitivitätsanalyse: Bilder mit diesem QC-Flag weglassen (mehrfach)"),
+    ] = None,
+) -> None:
+    """Skala (Ringbänder), D1/ΔD1, D_ring/ΔD_ring und Kenngrößen je Zyklus und Stange."""
+    from .deflection import add_deflection, bar_summary, cycle_summary
+
+    catalog, cfg = load_bars(bars), load_analysis(analysis)
+    excl = pd.read_csv(exclusions) if exclusions.exists() else None
+    df = add_deflection(
+        pd.read_csv(tracking, dtype={"cycle": str}), catalog, cfg, excl, drop_qc_flag or ()
+    )
+    cyc = cycle_summary(df, cfg)
+    per_bar = bar_summary(cyc, catalog)
+    for path, frame in ((out, df), (cycles_out, cyc), (bars_out, per_bar)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(path, index=False)
+    n_valid = int(df["delta_d1_mm"].notna().sum())
+    typer.echo(f"ΔD1 für {n_valid}/{len(df)} Bilder -> {out}")
+    n_excl = int((df["exclusion_reason"] != "").sum())
+    if n_excl:
+        typer.echo(f"Ausgeschlossen: {n_excl} Bilder (Spalte exclusion_reason)")
+    typer.echo(f"Zyklen -> {cycles_out}, Stangen -> {bars_out}")
+
+
+@app.command()
+def stats(
+    cycles: Path = Path("data/derived/cycle_summary.csv"),
+    out_dir: Path = Path("data/derived/stats"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+) -> None:
+    """Statistik nach Analyseplan Abschnitt 6 (H1, Deskriptiv, H2, Reliabilität)."""
+    from .stats import run_all
+
+    tables = run_all(
+        pd.read_csv(cycles, dtype={"cycle": str}), load_bars(bars), load_analysis(analysis)
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, frame in tables.items():
+        frame.to_csv(out_dir / f"{name}.csv", index=False)
+    h1 = tables["h1"].iloc[0]
+    typer.echo(
+        f"H1 (Deadlift nachgiebiger als Power): Differenz {h1['mean_diff']:.2f} mm/100 kg, "
+        f"Hedges g {h1['hedges_g']:.2f}, exakter p-Wert {h1['p_exact']:.4f} "
+        f"({int(h1['n_permutations'])} Zuordnungen)"
+    )
+    typer.echo(f"Tabellen ({', '.join(tables)}) -> {out_dir}")
+
+
+@app.command()
+def plot(
+    deflection: Path = Path("data/derived/deflection.csv"),
+    cycles: Path = Path("data/derived/cycle_summary.csv"),
+    stats_dir: Path = Path("data/derived/stats"),
+    out_dir: Path = Path("data/plots"),
+    bars: Path = BARS,
+    fmt: Annotated[
+        list[str] | None, typer.Option(help="Dateiformat (mehrfach angebbar), z. B. png, pdf, svg")
+    ] = None,
+) -> None:
+    """Abbildungen aus den Tabellen von `deflect` und `stats` (Kurven, Nachgiebigkeit, H1, H2)."""
+    from .plots import make_all
+
+    tables = {p.stem: pd.read_csv(p) for p in sorted(stats_dir.glob("*.csv"))}
+    if not tables:
+        typer.echo(f"Keine Statistik-Tabellen in {stats_dir}: erst `barbellscan stats` ausführen.")
+    paths = make_all(
+        pd.read_csv(deflection, dtype={"cycle": str}),
+        pd.read_csv(cycles, dtype={"cycle": str}),
+        tables,
+        load_bars(bars),
+        out_dir,
+        tuple(fmt or ["png"]),
+    )
+    for path in paths:
+        typer.echo(f"  {path}")
+    typer.echo(f"{len(paths)} Abbildungen -> {out_dir}")
 
 
 @app.command()
 def compare(
-    tracking: Path = Path("data/derived/tracking.csv"),
+    deflection: Path = Path("data/derived/deflection.csv"),
     truth: Path = Path("data/synthetic/truth.csv"),
 ) -> None:
-    """Tracking-Ergebnis gegen synthetische Ground Truth vergleichen (Bias, RMSE, LoA)."""
+    """Auswertung gegen synthetische Ground Truth vergleichen (Bias, RMSE, LoA)."""
     from .validation import compare_to_truth
 
-    for k, v in compare_to_truth(pd.read_csv(tracking), pd.read_csv(truth)).items():
+    stats = compare_to_truth(pd.read_csv(deflection), pd.read_csv(truth))
+    for k, v in stats.items():
         typer.echo(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
 
 
 @app.command()
 def overlay(
     image: Path,
-    out: Path = Path("outputs/overlay.png"),
-    analysis: Path = Path("config/analysis.yaml"),
+    bar_id: str = typer.Option(..., "--bar", help="bar_id aus config/bars.yaml"),
+    out: Path = Path("outputs/overlay.jpg"),
+    bars: Path = BARS,
+    analysis: Path = ANALYSIS,
+    full_frame: bool = typer.Option(False, help="ROI ignorieren"),
 ) -> None:
     """Einzelbild auswerten und QC-Overlay speichern."""
     import cv2
 
     from .tracking import draw_overlay, track_image
 
-    img = cv2.imread(str(image), cv2.IMREAD_COLOR)
     cfg = load_analysis(analysis)
-    row = track_image(img, marker_size_mm=cfg.aruco_size_mm, ball_hang_mm=cfg.ball_hang_mm)
+    img = cv2.imread(str(image), cv2.IMREAD_COLOR)
+    if img is None:
+        raise typer.BadParameter(f"Bild nicht lesbar: {image}")
+    row = track_image(img, load_bars(bars).bar(bar_id), cfg, full_frame)
+    roi = None if full_frame else cfg.detection.roi_frac
     out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), draw_overlay(img, row))
-    typer.echo(f"D1 = {row['d1_mm']:.3f} mm, Flags: {row['quality_flags'] or '-'}")
+    cv2.imwrite(str(out), draw_overlay(img, row, roi, title=image.name))
+    typer.echo(
+        f"d1 = {row['d1_px']:.2f} px, Ringabstand = {row['ring_dist_px']:.1f} px, "
+        f"Flags: {row['detect_flags'] or '-'} -> {out}"
+    )

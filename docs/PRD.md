@@ -5,7 +5,7 @@
 | **Projekt** | *Standardisation vs. Flexibility: A Quantitative Analysis of Barbell Deflection Under Heavy Loads Across Federation Regulations* (Human Factors and Sports Engineering, Wien) |
 | **Autor** | Nico Fuchs |
 | **Betreuer** | MSc. Markus Eckelt, MSc. Alexander Renner |
-| **Status** | v0.2 (16.10.2026, CW 42): Interview-Ergebnis, Markerkonzept aktualisiert. M0 und M1 umgesetzt (siehe [ROADMAP](ROADMAP.md)) |
+| **Status** | v0.2 (16.10.2026, CW 42), seither nicht fortgeschrieben; **historisches Dokument**. Seit 15.11.2026 gilt bei Widersprüchen der [Analyseplan](ANALYSIS_PLAN.md) (Design, Marker, Zielgrößen, Statistik), den Umsetzungsstand zeigt die [ROADMAP](ROADMAP.md), die Modulstruktur das [README](../README.md#projektstruktur). |
 | **Quellen** | Concept Draft (.docx), Draft-Präsentation (.pptx), Creo-Modell Sleeve-Aufsatz (`kk.prt`) |
 
 ---
@@ -202,7 +202,7 @@ Ziel: Nachweis, dass Messfehler klein gegenüber den gesuchten Effekten sind und
 - Unsicherheitsbudget: Subpixel-Detektion, Skalenfehler, Verzerrungsrest, Markerneigung; Fortpflanzung per Monte-Carlo (10⁴ Ziehungen) auf D1–D4.
 
 ### 8.5 Software
-NumPy, pandas, SciPy, statsmodels (Regression, F-Test, Mixed Models), pingouin oder eigene ICC-Implementierung (gegen Referenz getestet), OpenCV, matplotlib, SciencePlots, joblib. Zufallszahlen immer mit festem Seed aus der Config.
+NumPy, pandas, SciPy, eigene ICC-Implementierung (gegen Referenz getestet), OpenCV, matplotlib, joblib. Zufallszahlen immer mit festem Seed aus der Config.
 
 ---
 
@@ -237,31 +237,10 @@ NumPy, pandas, SciPy, statsmodels (Regression, F-Test, Mixed Models), pingouin o
 Das Manifest erlaubt, jedes Ergebnis einem exakten Bild zuzuordnen, ohne dass die Bilder im Repo liegen.
 
 ### 10.2 Struktur
-```
-barbellscan/
-├── pyproject.toml, uv.lock, .python-version
-├── config/            # bars.yaml, camera.yaml, analysis.yaml, markers.yaml
-├── data/              # manifest.csv, derived/ (git), raw/ (gitignored)
-├── docs/              # PRD.md, ROADMAP.md, Methodik, ADRs
-├── src/barbellscan/
-│   ├── config.py      # pydantic-Modelle für YAML
-│   ├── io.py          # Manifest, Bilder, EXIF
-│   ├── calibration.py # Intrinsics, Undistortion, Reprojektionsfehler
-│   ├── detection.py   # ArUco (Hintergrund) / gelbe Kugeln / Tape
-│   ├── geometry.py    # Homographie, Skala, Biegelinie
-│   ├── deflection.py  # D1–D4, Unsicherheit
-│   ├── qc.py          # Flags, Overlays, Bericht
-│   ├── simulate.py    # synthetische Bilder (Ground Truth)
-│   ├── beam_model.py  # Euler-Bernoulli
-│   ├── stats/         # descriptive, linearity, categories, reliability
-│   ├── plots.py, tables.py
-│   └── cli.py
-├── tests/
-└── .github/workflows/ci.yml
-```
+Umgesetzt ist eine schlankere Struktur als ursprünglich geplant (keine Kamerakalibrierung, kein ArUco, Statistik in einem Modul); siehe [README](../README.md#projektstruktur).
 
 ### 10.3 Datenfluss
-`Manifest + Fotos → Undistortion → Marker-Detektion → Skalierung/Rektifizierung → D1–D4 + Unsicherheit → Tidy-Dataset → Validierung + Statistik → Tabellen/Plots`
+`Manifest + Fotos → track (gelbe Kugeln und Bänder) → deflect (Skala aus den Ringbändern, D1, ΔD1, ΔD_ring) → stats (H1, H2, ICC/MDC95) → plot`
 
 ---
 

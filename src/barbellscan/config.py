@@ -8,75 +8,155 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-Category = Literal["power", "deadlift", "squat"]
+Category = Literal["power", "deadlift", "squat", "weightlifting"]
+Phase = Literal["up", "down"]
 
 
-class BarModel(BaseModel):
-    model_id: str
+class Bar(BaseModel):
+    bar_id: str
+    photo_prefix: str
     name: str
-    manufacturer: str
+    manufacturer: str | None = None
     article: str | None = None
     category: Category
-    total_length_mm: float = Field(gt=0)
+    mass_kg: float = Field(gt=0)
     shaft_diameter_mm: float = Field(gt=0)
-    tensile_strength_psi: float = Field(gt=0)
+    total_length_mm: float = Field(gt=0)
     shaft_length_mm: float = Field(gt=0)
-    weight_kg: float = Field(gt=0)
-    replicates: int = Field(default=1, ge=1)
+    ring_spacing_mm: float = Field(gt=0)
+    note: str | None = None
 
     @model_validator(mode="after")
-    def _shaft_shorter_than_bar(self) -> BarModel:
-        if self.shaft_length_mm >= self.total_length_mm:
-            raise ValueError(f"{self.model_id}: Schaft muss kürzer als die Stange sein")
+    def _plausible_lengths(self) -> Bar:
+        if not self.ring_spacing_mm < self.shaft_length_mm < self.total_length_mm:
+            raise ValueError(f"{self.bar_id}: erwartet Ringabstand < Schaft < Gesamtlänge")
         return self
+
+    def ball_span_mm(self, ball_offset_mm: float) -> float:
+        """Nomineller Abstand der Kugelmitten (Gesamtlänge + 2 x Kugelversatz)."""
+        return self.total_length_mm + 2.0 * ball_offset_mm
 
 
 class BarCatalog(BaseModel):
-    bars: list[BarModel]
+    bars: list[Bar]
 
     @model_validator(mode="after")
-    def _unique_ids(self) -> BarCatalog:
-        ids = [b.model_id for b in self.bars]
-        if len(ids) != len(set(ids)):
-            raise ValueError("model_id muss eindeutig sein")
+    def _unique(self) -> BarCatalog:
+        for attr in ("bar_id", "photo_prefix"):
+            vals = [getattr(b, attr) for b in self.bars]
+            if len(vals) != len(set(vals)):
+                raise ValueError(f"{attr} muss eindeutig sein")
         return self
 
     def bar_ids(self) -> list[str]:
-        """Physische Stangen: ``<model_id>`` bzw. ``<model_id>_<n>`` bei mehreren Exemplaren."""
-        return [
-            b.model_id if b.replicates == 1 else f"{b.model_id}_{i}"
-            for b in self.bars
-            for i in range(1, b.replicates + 1)
-        ]
+        return [b.bar_id for b in self.bars]
 
-    def model_of(self, bar_id: str) -> BarModel:
+    def bar(self, bar_id: str) -> Bar:
         for b in self.bars:
-            if bar_id == b.model_id or bar_id.rsplit("_", 1)[0] == b.model_id:
+            if b.bar_id == bar_id:
                 return b
         raise KeyError(bar_id)
 
+    def by_prefix(self, photo_prefix: str) -> Bar:
+        for b in self.bars:
+            if b.photo_prefix == photo_prefix:
+                return b
+        raise KeyError(photo_prefix)
+
+
+class Geometry(BaseModel):
+    hook_inner_mm: float = Field(default=650.0, gt=0)
+    hook_outer_mm: float = Field(default=725.0, gt=0)
+    ball_diameter_mm: float = Field(default=15.0, gt=0)
+    ball_offset_mm: float = Field(default=35.0, ge=0)
+    tape_width_mm: float = Field(default=14.0, gt=0)
+    tape_thickness_mm: float = Field(default=0.15, ge=0)
+    plate_thickness_mm: float = Field(default=27.0, gt=0)
+    collar_centre_mm: float = Field(default=15.0, ge=0)
+
+    @property
+    def support_offset_loaded_mm(self) -> float:
+        """Auflage unter Last an den Hook-Außenkanten."""
+        return self.hook_outer_mm / 2.0
+
+
+class Detection(BaseModel):
+    nominal_px_per_mm: float = Field(default=2.36, gt=0)
+    scale_tolerance: float = Field(default=0.3, gt=0, lt=1)
+    roi_frac: tuple[float, float, float, float] | None = None
+    yellow_threshold: float = Field(default=0.15, gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def _roi_ordered(self) -> Detection:
+        if self.roi_frac is not None:
+            x0, y0, x1, y1 = self.roi_frac
+            if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
+                raise ValueError("roi_frac: 0 <= x0 < x1 <= 1 und 0 <= y0 < y1 <= 1")
+        return self
+
+
+class Step(BaseModel):
+    step: int
+    phase: Phase
+    plates_per_side: int
+    added_mass_kg: float
+
 
 class AnalysisConfig(BaseModel):
-    loads_kg: list[float] = Field(min_length=2)
-    runs: int = Field(ge=1)
-    baseline_after_unload: bool = True
-    support_offset_mm: float = Field(gt=0)
-    aruco_size_mm: float = Field(default=100.0, gt=0)  # Referenzmarker im Hintergrund
-    ball_diameter_mm: float = Field(default=50.0, gt=0)  # gelbe Kugeln an den Kappen
-    ball_hang_mm: float = Field(default=0.0, ge=0)  # Kugelmitte unter dem Sleeve-Ende
-    primary_definition: Literal["D1", "D2", "D3", "D4"] = "D1"
+    cycles: list[str] = Field(min_length=1)
+    max_plates_per_side: int = Field(ge=1)
+    plate_mass_kg: float = Field(gt=0)
+    collar_mass_kg: float = Field(ge=0)
+    geometry: Geometry = Geometry()
+    detection: Detection = Detection()
+    primary_outcome: Literal["compliance_mm_per_100kg"] = "compliance_mm_per_100kg"
     sign_convention: str = "ends_below_centre_positive"
     alpha: float = Field(default=0.05, gt=0, lt=1)
     seed: int = 0
 
-    @model_validator(mode="after")
-    def _loads_ascending(self) -> AnalysisConfig:
-        if self.loads_kg != sorted(set(self.loads_kg)):
-            raise ValueError("loads_kg muss streng aufsteigend sein")
-        return self
+    def added_mass_kg(self, plates_per_side: int) -> float:
+        """Zusatzmasse (Scheiben + Klemmen beider Seiten), ohne Eigengewicht der Stange."""
+        if plates_per_side == 0:
+            return 0.0
+        return 2.0 * (plates_per_side * self.plate_mass_kg + self.collar_mass_kg)
 
-    def images_per_bar_run(self) -> int:
-        return len(self.loads_kg) + int(self.baseline_after_unload)
+    def load_moment_kgm(self, plates_per_side: int, bar: Bar) -> float:
+        """Lastmoment beider Seiten um die Auflager in kg·m (Plan, Nachtrag N3).
+
+        Scheibe k (k = 1 … n) sitzt mit ihrem Schwerpunkt bei Sleeve-Anschlag + (k − ½)·Dicke,
+        die Klemme außen daran. Das Biegemoment im Schaft zwischen den Auflagern ist nach der
+        Statik genau dieses Moment (mal g), unabhängig von der Lagerung der Sleeves.
+        """
+        if plates_per_side == 0:
+            return 0.0
+        g = self.geometry
+        stop, a, t = bar.shaft_length_mm / 2.0, g.support_offset_loaded_mm, g.plate_thickness_mm
+        arms = [stop + (k + 0.5) * t - a for k in range(plates_per_side)]
+        collar_arm = stop + plates_per_side * t + g.collar_centre_mm - a
+        one_side = self.plate_mass_kg * sum(arms) + self.collar_mass_kg * collar_arm
+        return 2.0 * one_side / 1000.0
+
+    def schedule(self) -> list[Step]:
+        """Stufen eines Zyklus: 0 -> max (up), danach zurück auf 0 (down)."""
+        n = self.max_plates_per_side
+        plates = list(range(n + 1)) + list(range(n - 1, -1, -1))
+        return [
+            Step(
+                step=i,
+                phase="up" if i <= n else "down",
+                plates_per_side=p,
+                added_mass_kg=self.added_mass_kg(p),
+            )
+            for i, p in enumerate(plates)
+        ]
+
+    @property
+    def peak_step(self) -> int:
+        return self.max_plates_per_side
+
+    @property
+    def final_step(self) -> int:
+        return 2 * self.max_plates_per_side
 
 
 def _load_yaml(path: Path) -> dict:

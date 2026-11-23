@@ -1,12 +1,31 @@
-# Studiendesign und Analyseparameter (PRD Abschnitte 5 und 8)
-loads_kg: [20, 75, 125, 175, 225, 275, 325, 375, 425]   # Maximallast auf 425 kg reduziert
-runs: 5
-baseline_after_unload: true      # Baseline-Foto nach Entlastung je Run (PRD O3)
-support_offset_mm: 371           # Auflagepunkte links/rechts vom Zentrum
-aruco_size_mm: 100               # ArUco-Referenzmarker im Hintergrund (ANNAHME, am Druck nachmessen)
-ball_diameter_mm: 50             # gelbe Kugeln an den Sleeve-Kappen (ANNAHME)
-ball_hang_mm: 0                  # vertikaler Versatz Kugelmitte zum Sleeve-Ende; 0 = starr montiert
-primary_definition: D1           # PRD O1, vor Sichtung der Echtdaten einfrieren
+# Studiendesign und Analyseparameter (docs/ANALYSIS_PLAN.md)
+
+# --- Design: 3 Zyklen x 17 Stufen (0 -> 8 Scheiben je Seite -> 0) ---
+cycles: [A, B, C]
+max_plates_per_side: 8
+plate_mass_kg: 25          # kalibrierte Eleiko-Scheiben
+collar_mass_kg: 2.5        # je Klemme, ab der ersten Scheibe
+# Zusatzmasse = 0 (leer) bzw. 2 * (n * plate + collar) = 55, 105, ..., 405 kg
+
+# --- Messgeometrie (Plan Abschnitt 3) ---
+geometry:
+  hook_inner_mm: 650       # Abstand der Hook-Innenflächen
+  hook_outer_mm: 725       # Abstand der Hook-Außenflächen (Auflage unter Last: +-362.5 mm)
+  ball_diameter_mm: 15     # gelbe Holzkugel auf der Kappe BC-001
+  ball_offset_mm: 35       # Kugelmitte hinter der Sleeve-Stirnfläche (Kugelabstand = L + 70)
+  tape_width_mm: 14        # gelbe Bänder (Mitte, Ringmarkierungen)
+  tape_thickness_mm: 0.15  # Isolierband (ANNAHME); Achse = Band-Oberkante - (d/2 + Stärke)
+  plate_thickness_mm: 27   # 25-kg-Scheibe (ANNAHME, bitte nachmessen); für das Lastmoment (Nachtrag N3)
+  collar_centre_mm: 15     # Schwerpunkt der Klemme hinter der letzten Scheibe (ANNAHME)
+
+# --- Detektion (Plan Abschnitt 4) ---
+detection:
+  nominal_px_per_mm: 2.36  # nur zur Plausibilisierung (+- scale_tolerance), Skala kommt aus den Ringbändern
+  scale_tolerance: 0.3
+  roi_frac: [0.0, 0.40, 1.0, 0.70]   # x0, y0, x1, y1 als Anteil der Bildgröße; schließt Monolift-Knöpfe und Wandösen aus
+  yellow_threshold: 0.15   # Gelbanteil (min(R,G) - B) / 255 für die Blobsuche
+
+primary_outcome: compliance_mm_per_100kg
 sign_convention: ends_below_centre_positive
 alpha: 0.05
-seed: 20261016
+seed: 20261115

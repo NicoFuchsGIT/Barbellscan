@@ -1,107 +1,212 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from barbellscan.config import load_analysis, load_bars
-from barbellscan.deflection import d1_mm
-from barbellscan.detection import detect_balls
-from barbellscan.simulate import SimParams, bend_profile, plates_for_load, render
+from barbellscan.deflection import add_deflection, bar_summary, chord_offset_px, cycle_summary
+from barbellscan.detection import Blob, measure_tape, roi_px
+from barbellscan.simulate import SimParams, _fill_exact, bend_profile, render
 from barbellscan.tracking import draw_overlay, track_image
 from barbellscan.validation import compare_to_truth
 
-CFG = load_analysis()
 BARS = load_bars()
+CFG = load_analysis()
+# Synthetik: 1 px/mm, keine ROI (die echte ROI gilt für 6000 x 3376 px Fotos)
+SIM_CFG = CFG.model_copy(
+    update={
+        "detection": CFG.detection.model_copy(update={"nominal_px_per_mm": 1.0, "roi_frac": None})
+    }
+)
 
 
-def _render(bar_id="ohio_deadlift", d1=10.0, seed=1, **kw):
-    bar = BARS.model_of(bar_id)
-    return render(bar, d1, CFG.support_offset_mm, SimParams(**kw), np.random.default_rng(seed))
+def _render(bar_id="ohio_deadlift", d1=40.0, seed=1, **kw):
+    return render(BARS.bar(bar_id), d1, CFG.geometry, SimParams(**kw), np.random.default_rng(seed))
+
+
+def _track(res, bar_id):
+    return track_image(res.image, BARS.bar(bar_id), SIM_CFG)
 
 
 def test_bend_profile_hits_requested_d1_and_straight_sleeves():
-    bar = BARS.model_of("texas_deadlift")
-    x = np.linspace(-bar.total_length_mm / 2, bar.total_length_mm / 2, 2001)
-    y = bend_profile(x, bar, CFG.support_offset_mm, 12.0)
-    assert y[1000] - y[0] == pytest.approx(12.0, abs=0.02)
-    assert y[1000] > 0 > y[0]
-    assert y[abs(x - CFG.support_offset_mm).argmin()] == pytest.approx(0.0, abs=0.05)
-    sleeves = np.abs(x) > bar.shaft_length_mm / 2 + 20
-    assert np.allclose(np.diff(y[sleeves & (x > 0)], 2), 0, atol=1e-6)  # gerade
+    bar = BARS.bar("texas_deadlift")
+    end = bar.total_length_mm / 2 + 35
+    x = np.linspace(-end, end, 4001)
+    y = bend_profile(x, bar, 362.5, 12.0, end)
+    assert y[2000] - y[0] == pytest.approx(12.0, abs=0.02)
+    assert y[2000] > 0 > y[0]
+    assert y[abs(x - 362.5).argmin()] == pytest.approx(0.0, abs=0.05)
+    sleeves = x > bar.shaft_length_mm / 2 + 20
+    assert np.allclose(np.diff(y[sleeves], 2), 0, atol=1e-6)  # gerade
 
 
-def test_d1_is_roll_invariant_and_signed():
+def test_chord_offset_is_roll_invariant_and_signed():
     ang = np.deg2rad(5)
     rot = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]])
     pts = [np.array(p) for p in ((0.0, 100.0), (1000.0, 100.0), (500.0, 90.0))]  # Mitte 10 px oben
-    base = d1_mm(*(tuple(p) for p in pts), 1.0)
-    rolled = d1_mm(*(tuple(rot @ p) for p in pts), 1.0)
-    assert base == pytest.approx(10.0)
-    assert rolled == pytest.approx(10.0)
-    assert d1_mm((0, 100), (1000, 100), (500, 110), 2.0) == pytest.approx(-5.0)
+    assert chord_offset_px(*(tuple(p) for p in pts)) == pytest.approx(10.0)
+    assert chord_offset_px(*(tuple(rot @ p) for p in pts)) == pytest.approx(10.0)
+    assert chord_offset_px((0, 100), (1000, 100), (500, 110)) == pytest.approx(-10.0)
 
 
-@pytest.mark.parametrize("d1", [0.0, 3.0, 18.0, 35.0])
-def test_tracking_recovers_known_deflection(d1):
-    res = _render(d1=d1, roll_deg=0.4)
-    row = track_image(res.image)
-    assert row["quality_flags"] == ""
-    assert row["d1_mm"] == pytest.approx(d1, abs=0.25)
-    assert row["scale_px_per_mm"] == pytest.approx(1.0, rel=0.01)
+@pytest.mark.parametrize(
+    ("bar_id", "d1", "plates"),
+    [("ohio_power", 0.0, 0), ("ohio_power", 70.0, 8), ("texas_deadlift", 105.0, 8),
+     ("zkc_iwf", 30.0, 4), ("texas_squat", 60.0, 6)],
+)  # fmt: skip
+def test_tracking_recovers_deflection_and_ring_scale(bar_id, d1, plates):
+    res = _render(bar_id, d1, plates_per_side=plates, roll_deg=0.5, shift_px=(3.3, -2.1))
+    row = _track(res, bar_id)
+    assert row["detect_flags"] == ""
+    scale = row["ring_dist_px"] / BARS.bar(bar_id).ring_spacing_mm
+    assert scale == pytest.approx(1.0, rel=0.001)
+    assert row["d1_px"] / scale == pytest.approx(d1, abs=0.2)
+    assert row["dring_px"] / scale == pytest.approx(res.dring_mm, abs=0.2)
 
 
-def test_ball_centroids_match_truth_to_subpixel():
-    res = _render(d1=12.0, roll_deg=0.3)
-    balls = detect_balls(res.image)
-    for name in ("left", "right"):
-        assert np.allclose(balls[name][0], res.points_px[name], atol=0.15)
+def test_marker_points_match_truth_to_subpixel():
+    """Kugeln: Mittelpunkt; Bänder: Schwerpunkt in der Schaftzone (Plan, Nachtrag N5)."""
+    res = _render("texas_deadlift", 80.0, plates_per_side=6, roll_deg=0.3)
+    row = _track(res, "texas_deadlift")
+    for name, truth in res.points_px.items():
+        assert np.allclose((row[f"{name}_x"], row[f"{name}_y"]), truth, atol=0.2), name
 
 
-def test_plates_do_not_disturb_tracking():
-    res = _render("ohio_power", d1=6.0, plates_per_side=4, roll_deg=0.3)
-    row = track_image(res.image)
-    assert row["quality_flags"] == ""
-    assert row["d1_mm"] == pytest.approx(6.0, abs=0.25)
+@pytest.mark.parametrize("theta", [0.0, 0.05, -0.1, 0.15])
+def test_tape_axis_from_top_edge_is_exact_for_tilted_band(theta):
+    r = 14.65
+    img = np.full((140, 200, 3), 45, np.uint8)
+    c = np.array([100.3, 70.2])
+    u = np.array([np.cos(theta), np.sin(theta)])
+    n = np.array([-u[1], u[0]])
+    for half_len, half_h, col in ((90, 14.5, (150, 148, 145)), (7, r, (20, 210, 245))):
+        corners = [
+            c + a * u * half_len + b * n * half_h for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+        ]
+        _fill_exact(img, np.array(corners), col)
+    fit = measure_tape(img, Blob(tuple(c), 1.0, 1, (88, 50, 114, 90)), r, 1.0)
+    assert np.allclose(fit.axis_point(r), c, atol=0.05)
+    assert np.arctan2(fit.direction[1], fit.direction[0]) == pytest.approx(theta, abs=0.005)
 
 
-def test_hanging_balls_shift_d1_by_hang_length_and_can_be_corrected():
-    """Hängende Kugeln senken die Sehne um h => D1 + h; mit bekanntem h korrigierbar."""
-    img = _render(d1=15.0, ball_hang_mm=40.0).image
-    assert track_image(img)["d1_mm"] == pytest.approx(55.0, abs=0.25)
-    assert track_image(img, ball_hang_mm=40.0)["d1_mm"] == pytest.approx(15.0, abs=0.25)
+@pytest.mark.parametrize("angle", [8.0, -25.0])
+@pytest.mark.parametrize("scale", [1.0, 2.36])
+def test_hanging_tape_is_clipped_to_shaft_zone_and_flagged(angle, scale):
+    flaps = {"centre": 30.0, "ring_left": 25.0}
+    res = _render("ohio_power", 70.0, plates_per_side=8, roll_deg=0.4, tape_flaps_mm=flaps,
+                  flap_angle_deg=angle, scale_px_per_mm=scale, supersample=2)  # fmt: skip
+    cfg = SIM_CFG.model_copy(
+        update={"detection": SIM_CFG.detection.model_copy(update={"nominal_px_per_mm": scale})}
+    )
+    row = track_image(res.image, BARS.bar("ohio_power"), cfg)
+    assert set(row["detect_flags"].split(";")) == {"tape_hanging_centre", "tape_hanging_ring_left"}
+    s = row["ring_dist_px"] / 810
+    tol = 0.7 if scale > 2 else 1.0  # Rest des Lappens in der Zone; 1 px/mm ist gröber
+    assert row["d1_px"] / s == pytest.approx(70.0, abs=tol)
+    assert row["dring_px"] / s == pytest.approx(res.dring_mm, abs=tol)
+    assert row["d1_px_centroid"] / s < 70.0 - 5.0  # Schwerpunkt der ganzen Fläche: stark verfälscht
+    assert row["d1_px_axis"] / s == pytest.approx(70.0, abs=0.15)  # Oberkanten-Methode (N2)
 
 
-def test_aruco_in_other_depth_plane_biases_scale():
-    """Parallaxe-Risiko: Markerebene 5 % weiter weg => Skala 5 % zu klein => D1 5 % zu groß."""
-    row = track_image(_render(d1=20.0, aruco_scale_ratio=0.95).image)
-    assert row["d1_mm"] == pytest.approx(20.0 / 0.95, rel=0.01)
+def test_without_flap_shaft_zone_centroid_equals_plain_centroid():
+    res = _render("texas_deadlift", 90.0, plates_per_side=8, roll_deg=-0.5, scale_px_per_mm=2.36,
+                  supersample=2)  # fmt: skip
+    cfg = SIM_CFG.model_copy(
+        update={"detection": SIM_CFG.detection.model_copy(update={"nominal_px_per_mm": 2.36})}
+    )
+    row = track_image(res.image, BARS.bar("texas_deadlift"), cfg)
+    assert row["detect_flags"] == ""
+    assert row["d1_px"] == pytest.approx(row["d1_px_centroid"], abs=0.05)
+    assert row["dring_px"] == pytest.approx(row["dring_px_centroid"], abs=0.05)
+    assert row["d1_px"] / 2.36 == pytest.approx(90.0, abs=0.1)
 
 
-def test_plates_for_load_matches_protocol():
-    assert [plates_for_load(x) for x in (20, 75, 125, 225, 425)] == [0, 1, 2, 4, 8]
+def test_monolift_knobs_are_ignored_without_roi():
+    res = _render("ohio_power", 20.0, distractors=True)
+    row = _track(res, "ohio_power")
+    assert row["detect_flags"] == ""
+    assert row["centre_y"] == pytest.approx(res.points_px["centre"][1], abs=0.2)
 
 
-def test_missing_markers_are_flagged_not_raised():
-    img = _render("ohio_power", d1=8.0).image.copy()
-    img[:, : img.shape[1] // 4] = 225  # linke Kugel auslöschen
-    row = track_image(img)
-    assert "missing_ball" in row["quality_flags"]
-    assert np.isnan(row["d1_mm"])
-    img2 = _render("ohio_power", d1=8.0).image.copy()
-    img2[: img2.shape[0] // 4, :] = 225  # ArUco auslöschen
-    assert "missing_aruco" in track_image(img2)["quality_flags"]
+def test_missing_ball_is_flagged_and_rest_is_found():
+    res = _render("ohio_deadlift", 30.0, plates_per_side=2)
+    img = res.image.copy()
+    lx, ly = (int(round(v)) for v in res.points_px["left"])
+    img[ly - 15 : ly + 16, lx - 15 : lx + 16] = 25  # Kugel entfernt (Kappe schwarz)
+    row = track_image(img, BARS.bar("ohio_deadlift"), SIM_CFG)
+    assert row["detect_flags"] == "missing_left"
+    assert np.isnan(row["d1_px"]) and not np.isnan(row["dring_px"])
+    assert not np.isnan(row["right_x"])
 
 
-def test_compare_to_truth_reports_small_bias(tmp_path):
+def test_missing_ring_falls_back_to_balls_and_centre():
+    res = _render("ohio_power", 30.0)
+    img = res.image.copy()
+    rx, ry = (int(round(v)) for v in res.points_px["ring_left"])
+    img[ry - 25 : ry + 26, rx - 15 : rx + 16] = 150  # Ringband überklebt (Stahlgrau)
+    row = track_image(img, BARS.bar("ohio_power"), SIM_CFG)
+    assert "missing_ring" in row["detect_flags"]
+    assert row["d1_px"] == pytest.approx(30.0, abs=0.3)
+    assert np.isnan(row["ring_dist_px"])
+
+
+def test_roi_excludes_regions_outside():
+    assert roi_px((3376, 6000, 3), CFG.detection.roi_frac) == (0, 1350, 6000, 2363)
+    res = _render("ohio_power", 20.0)
+    cfg = SIM_CFG.model_copy(
+        update={"detection": SIM_CFG.detection.model_copy(update={"roi_frac": (0, 0, 1, 0.2)})}
+    )
+    row = track_image(res.image, BARS.bar("ohio_power"), cfg)
+    assert "missing_ring" in row["detect_flags"] and np.isnan(row["d1_px"])
+
+
+def _sim_cycle(bar_id, c, d0, cycle="A", shift=(0, 0), seed=0):
+    rows = []
+    for s in CFG.schedule():
+        res = _render(bar_id, d0 + c * s.added_mass_kg, seed + s.step,
+                      plates_per_side=s.plates_per_side, shift_px=shift, roll_deg=0.4)  # fmt: skip
+        rows.append(
+            {"bar_id": bar_id, "cycle": cycle, "step": s.step, "phase": s.phase,
+             "added_mass_kg": s.added_mass_kg, **_track(res, bar_id)}
+        )  # fmt: skip
+    return rows
+
+
+def test_delta_d1_removes_prebend_and_camera_shift_and_recovers_compliance():
+    c = 0.17  # mm/kg
+    rows = _sim_cycle("ohio_power", c, d0=4.0, cycle="A", shift=(0, 0))
+    rows += _sim_cycle("ohio_power", c, d0=-3.0, cycle="B", shift=(6.0, -9.0), seed=100)
+    df = add_deflection(pd.DataFrame(rows), BARS, CFG)
+    assert (df["deflection_flags"] == "").all()
+    assert df["px_per_mm"].to_numpy() == pytest.approx(1.0, rel=0.002)
+    truth = c * df["added_mass_kg"]
+    assert np.abs(df["delta_d1_mm"] - truth).max() < 0.25
+    cyc = cycle_summary(df, CFG)
+    assert cyc["compliance_mm_per_100kg"].to_numpy() == pytest.approx(17.0, rel=0.005)
+    assert np.abs(cyc["residual_mm"]).max() < 0.25
+    assert np.abs(cyc["hysteresis_mm"]).max() < 0.15
+    assert np.abs(cyc["nonlin_at_peak_mm"]).max() < 0.3
+    assert cyc["implied_length_mm"].to_numpy() == pytest.approx(2198, abs=2)
+    per_bar = bar_summary(cyc, BARS)
+    assert per_bar.loc[0, "n_cycles"] == 2
+    assert per_bar.loc[0, "stiffness_kg_per_mm"] == pytest.approx(1 / c, rel=0.005)
+
+
+def test_end_to_end_synthetic_dataset(tmp_path):
+    from barbellscan.config import load_analysis
     from barbellscan.simulate import generate_dataset
     from barbellscan.tracking import track_manifest
 
-    cfg = CFG.model_copy(update={"loads_kg": [20.0, 225.0, 425.0], "runs": 1})
+    cfg = CFG.model_copy(update={"cycles": ["A"], "max_plates_per_side": 2})
     truth = generate_dataset(tmp_path, BARS, cfg, only_bars=["texas_power"], n_jobs=1)
-    stats = compare_to_truth(track_manifest(tmp_path / "manifest.csv", n_jobs=1), truth)
+    sim_cfg = load_analysis(tmp_path / "analysis.yaml")
+    assert sim_cfg.detection.roi_frac is None
+    tracked = track_manifest(tmp_path / "manifest.csv", BARS, sim_cfg, n_jobs=1)
+    stats = compare_to_truth(add_deflection(tracked, BARS, sim_cfg), truth)
     assert stats["detection_rate"] == 1.0
-    assert abs(stats["bias_mm"]) < 0.15 and stats["rmse_mm"] < 0.2
+    assert abs(stats["delta_d1_bias_mm"]) < 0.15 and stats["delta_d1_rmse_mm"] < 0.25
 
 
 def test_overlay_draws_without_error():
-    img = _render("ohio_power", d1=8.0).image
-    out = draw_overlay(img, track_image(img))
-    assert out.shape == img.shape and (out != img).any()
+    res = _render("ohio_power", 8.0)
+    out = draw_overlay(res.image, _track(res, "ohio_power"), width=1000)
+    assert out.shape[1] == 1000 and out.shape[0] > res.image.shape[0] * 1000 / res.image.shape[1]

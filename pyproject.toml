@@ -8,19 +8,16 @@ dependencies = [
     "numpy",
     "pandas",
     "scipy",
-    "statsmodels",
     "opencv-python-headless",
     "matplotlib",
-    "scienceplots",
     "joblib",
     "pydantic>=2",
     "pyyaml",
-    "pyarrow",
     "typer",
 ]
 
 [dependency-groups]
-dev = ["pytest", "ruff", "pre-commit"]
+dev = ["pytest", "ruff", "pre-commit", "scipy-stubs"]
 
 [project.scripts]
 barbellscan = "barbellscan.cli:app"
